@@ -18,10 +18,18 @@ public class RemediationController : ControllerBase
     }
 
     [HttpPost("batch")]
-    [Consumes("multipart/form-data")]
     [RequestSizeLimit(100_000_000)] // 100MB limit
-    public async Task<IActionResult> ProcessBatch(IFormFile file, CancellationToken cancellationToken)
+    public async Task<IActionResult> ProcessBatch(CancellationToken cancellationToken)
     {
+        // Manually extract the file from the request to avoid model binding issues with proxied requests
+        if (!Request.HasFormContentType)
+        {
+            return BadRequest("Request must be multipart/form-data.");
+        }
+
+        var form = await Request.ReadFormAsync(cancellationToken);
+        var file = form.Files.GetFile("file");
+
         if (file == null || file.Length == 0)
         {
             return BadRequest("No file uploaded.");
@@ -34,13 +42,12 @@ public class RemediationController : ControllerBase
 
         try
         {
-            Response.StatusCode = StatusCodes.Status200OK;
             Response.ContentType = "application/zip";
             Response.Headers.Append("Content-Disposition", "attachment; filename=\"remediated_batch.zip\"");
 
             using var uploadStream = file.OpenReadStream();
             
-            // Write the zip stream directly to the HTTP response stream to prevent buffering the whole output in memory
+            // Write the zip stream directly to the HTTP response stream
             await _workflowService.ProcessBatchArchiveAsync(uploadStream, Response.Body, cancellationToken);
             
             return new EmptyResult();
@@ -48,7 +55,12 @@ public class RemediationController : ControllerBase
         catch (System.Exception ex)
         {
             Console.WriteLine($"ERROR in ProcessBatch: {ex}");
-            return StatusCode(500, $"Internal server error: {ex.Message}");
+            // Only return error if headers haven't been sent yet
+            if (!Response.HasStarted)
+            {
+                return StatusCode(500, $"Internal server error: {ex.Message}");
+            }
+            return new EmptyResult();
         }
     }
 }
