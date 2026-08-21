@@ -55,10 +55,8 @@ public class HeuristicPdfEngine
     {
         using var inputStream = new MemoryStream(pdfBytes);
         using var outputStream = new MemoryStream();
-        using var pdfReader = new PdfReader(inputStream);
-        using var pdfWriter = new PdfWriter(outputStream);
-        
-        using var pdfDoc = new PdfDocument(pdfWriter);
+        var pdfWriter = new PdfWriter(outputStream);
+        var pdfDoc = new PdfDocument(pdfWriter);
         
         // 1. Metadata Normalization
         if (options.NormalizeMetadata)
@@ -82,7 +80,7 @@ public class HeuristicPdfEngine
 
         // 3. Heuristic Auto-Tagging via Reconstruction
         pdfDoc.SetTagged();
-        using var layoutDoc = new iText.Layout.Document(pdfDoc);
+        var layoutDoc = new iText.Layout.Document(pdfDoc);
 
         // Read text from the original document
         using var sourceReader = new PdfReader(new MemoryStream(pdfBytes));
@@ -134,7 +132,7 @@ public class HeuristicPdfEngine
             }
         }
 
-        pdfDoc.Close();
+        layoutDoc.Close();
         return outputStream.ToArray();
     }
 }
