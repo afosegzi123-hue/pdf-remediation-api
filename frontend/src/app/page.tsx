@@ -1,24 +1,19 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import UploadDropzone from '@/components/UploadDropzone';
-import { uploadBatchArchive, warmUpBackend } from '@/lib/api';
+import { processPdf, RemediationOptions } from '@/lib/api';
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<'idle' | 'uploading' | 'processing' | 'completed' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [backendReady, setBackendReady] = useState(false);
-  const [warmingUp, setWarmingUp] = useState(true);
-
-  // Pre-warm the Render backend on page load so it's ready by the time the user uploads
-  useEffect(() => {
-    setWarmingUp(true);
-    warmUpBackend().then((ready) => {
-      setBackendReady(ready);
-      setWarmingUp(false);
-    });
-  }, []);
+  
+  const [options, setOptions] = useState<RemediationOptions>({
+    normalize_metadata: true,
+    tag_language: true,
+    auto_tag_structure: false,
+  });
 
   const handleFileSelect = (selectedFile: File) => {
     setFile(selectedFile);
@@ -33,15 +28,13 @@ export default function Home() {
     setErrorMessage(null);
 
     try {
-      // API call streams directly to processing
       setStatus('processing');
-      const blob = await uploadBatchArchive(file);
+      const { blob, filename } = await processPdf(file, options);
 
-      // Trigger automatic download
       const downloadUrl = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = downloadUrl;
-      link.download = `remediated_${file.name}`;
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -59,50 +52,15 @@ export default function Home() {
     <main className="min-h-screen bg-slate-50 flex flex-col items-center py-20 px-4 sm:px-6 lg:px-8">
       <div className="w-full max-w-4xl space-y-12">
         
-        {/* Header Section */}
         <div className="text-center space-y-4">
           <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-slate-900">
             PDF Remediation <span className="text-blue-600">Suite</span>
           </h1>
           <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-            Ensure full WCAG 2.1 AA / Section 508 compliance. Upload a batch ZIP archive containing your PDFs, and our automated engine will apply OCR, normalize metadata, and rebuild structural trees.
+            Ensure full WCAG 2.1 AA / Section 508 compliance. Upload a single PDF or a batch ZIP archive.
           </p>
         </div>
 
-        {/* Backend Status Banner */}
-        {warmingUp && (
-          <div className="p-4 bg-amber-50 text-amber-800 rounded-xl border border-amber-200 text-center animate-pulse">
-            <p className="font-semibold flex items-center justify-center gap-2">
-              <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-              </svg>
-              Waking up the backend server...
-            </p>
-            <p className="text-sm mt-1 text-amber-700">
-              Free-tier servers sleep after inactivity. This may take 1-2 minutes on first visit.
-            </p>
-          </div>
-        )}
-
-        {!warmingUp && backendReady && (
-          <div className="p-3 bg-green-50 text-green-800 rounded-xl border border-green-200 text-center">
-            <p className="text-sm font-medium flex items-center justify-center gap-2">
-              <span className="inline-block w-2 h-2 bg-green-500 rounded-full"></span>
-              Backend server is ready
-            </p>
-          </div>
-        )}
-
-        {!warmingUp && !backendReady && (
-          <div className="p-3 bg-red-50 text-red-800 rounded-xl border border-red-200 text-center">
-            <p className="text-sm font-medium">
-              ⚠️ Backend server could not be reached. Processing may fail or take longer than usual.
-            </p>
-          </div>
-        )}
-
-        {/* Upload Section */}
         <div className="bg-white shadow-xl shadow-slate-200/50 rounded-3xl p-8 border border-slate-100">
           <UploadDropzone 
             onFileSelect={handleFileSelect} 
@@ -125,20 +83,36 @@ export default function Home() {
                 </div>
               </div>
 
+              <div className="w-full max-w-md bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6 space-y-3">
+                <h3 className="text-sm font-semibold text-slate-700">Remediation Options</h3>
+                <label className="flex items-center space-x-3">
+                  <input type="checkbox" checked={options.normalize_metadata} onChange={e => setOptions({...options, normalize_metadata: e.target.checked})} className="form-checkbox h-4 w-4 text-blue-600 rounded border-slate-300" disabled={status !== 'idle'} />
+                  <span className="text-sm text-slate-700">Normalize Metadata</span>
+                </label>
+                <label className="flex items-center space-x-3">
+                  <input type="checkbox" checked={options.tag_language} onChange={e => setOptions({...options, tag_language: e.target.checked})} className="form-checkbox h-4 w-4 text-blue-600 rounded border-slate-300" disabled={status !== 'idle'} />
+                  <span className="text-sm text-slate-700">Set Language & Accessibility Flags</span>
+                </label>
+                <label className="flex items-center space-x-3">
+                  <input type="checkbox" checked={options.auto_tag_structure} onChange={e => setOptions({...options, auto_tag_structure: e.target.checked})} className="form-checkbox h-4 w-4 text-blue-600 rounded border-slate-300" disabled={status !== 'idle'} />
+                  <span className="text-sm text-slate-700">Auto-Tag Structure (AI Deep Layout)</span>
+                </label>
+              </div>
+
               <button
                 onClick={handleProcess}
                 disabled={status === 'uploading' || status === 'processing'}
                 className="w-full max-w-md bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-semibold py-3 px-6 rounded-xl shadow-sm transition-all duration-200 flex items-center justify-center space-x-2"
               >
                 {status === 'idle' || status === 'completed' || status === 'error' ? (
-                  <span>Start Batch Remediation</span>
+                  <span>Start Remediation</span>
                 ) : (
                   <>
                     <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    <span>{status === 'uploading' ? 'Uploading...' : 'Processing stream...'}</span>
+                    <span>Processing...</span>
                   </>
                 )}
               </button>

@@ -23,8 +23,11 @@ export default function UploadDropzone({ onFileSelect, isLoading }: UploadDropzo
 
   const validateAndSelect = (file: File) => {
     setError(null);
-    if (!file.name.toLowerCase().endsWith('.zip') && file.type !== 'application/zip') {
-      setError('Please upload a valid ZIP archive.');
+    const isZip = file.name.toLowerCase().endsWith('.zip') || file.type === 'application/zip';
+    const isPdf = file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf';
+    
+    if (!isZip && !isPdf) {
+      setError('Please upload a valid .zip archive or a .pdf file.');
       return;
     }
     onFileSelect(file);
@@ -63,7 +66,7 @@ export default function UploadDropzone({ onFileSelect, isLoading }: UploadDropzo
       >
         <input
           type="file"
-          accept=".zip,application/zip"
+          accept=".zip,application/zip,.pdf,application/pdf"
           onChange={handleFileChange}
           disabled={isLoading}
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer disabled:cursor-not-allowed"
@@ -88,7 +91,7 @@ export default function UploadDropzone({ onFileSelect, isLoading }: UploadDropzo
           </div>
           <div>
             <p className="text-lg font-semibold text-slate-700">
-              {isDragOver ? 'Drop the ZIP file here...' : 'Drag & drop a ZIP archive'}
+              {isDragOver ? 'Drop the file here...' : 'Drag & drop a ZIP or PDF file'}
             </p>
             <p className="text-sm text-slate-500 mt-1">
               or click anywhere to browse your files

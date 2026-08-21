@@ -1,72 +1,61 @@
 /**
- * API client to interact with the .NET PDF Remediation Backend.
- * 
- * Uses direct cross-origin requests to the Render backend with CORS enabled.
+ * API client to interact with the Python FastAPI Backend.
+ * Uses relative URLs since the frontend is served statically by the backend itself.
  */
 
-const API_BASE_URL = 'https://pdf-remediation-api.onrender.com';
+// Since the frontend and backend are on the same origin in Hugging Face, we use relative paths.
+const API_BASE_URL = '';
 
-export const uploadBatchArchive = async (file: File): Promise<Blob> => {
+export interface RemediationOptions {
+  normalize_metadata: boolean;
+  tag_language: boolean;
+  auto_tag_structure: boolean;
+}
+
+export const processPdf = async (file: File, options: RemediationOptions): Promise<{ blob: Blob, filename: string }> => {
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('options', JSON.stringify(options));
 
-  // Use AbortController with a generous timeout to handle Render free-tier cold starts
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 300_000); // 5 minute timeout
+  const isZip = file.name.toLowerCase().endsWith('.zip');
+  const endpoint = isZip ? '/api/remediation/batch' : '/api/remediation/single';
 
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/remediation/batch`, {
-      method: 'POST',
-      body: formData,
-      signal: controller.signal,
-    });
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: 'POST',
+    body: formData,
+  });
 
-    clearTimeout(timeoutId);
-
-    if (!response.ok) {
-      let errorMessage = `Server returned ${response.status} ${response.statusText}.`;
-      try {
-        const errorData = await response.text();
-        if (errorData) {
-          errorMessage += ` Details: ${errorData}`;
-        }
-      } catch {
-        // Ignore
+  if (!response.ok) {
+    let errorMessage = `Server returned ${response.status} ${response.statusText}.`;
+    try {
+      const errorData = await response.text();
+      if (errorData) {
+        errorMessage += ` Details: ${errorData}`;
       }
-      throw new Error(errorMessage);
+    } catch {
+      // Ignore
     }
-
-    // Return the streamed zip file as a Blob
-    return await response.blob();
-  } catch (error: any) {
-    clearTimeout(timeoutId);
-    
-    if (error.name === 'AbortError') {
-      throw new Error(
-        'The server took too long to respond. Render free-tier services may take 1-3 minutes to wake up from sleep. Please try again.'
-      );
-    }
-    throw error;
+    throw new Error(errorMessage);
   }
+
+  // Get filename from Content-Disposition header if possible
+  const contentDisposition = response.headers.get('Content-Disposition');
+  let filename = isZip ? 'remediated_batch.zip' : `remediated_${file.name}`;
+  if (contentDisposition) {
+    const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+    if (filenameMatch && filenameMatch.length === 2) {
+      filename = filenameMatch[1];
+    }
+  }
+
+  const blob = await response.blob();
+  return { blob, filename };
 };
 
-/**
- * Wake up the Render backend by hitting the health endpoint.
- * Call this early (e.g. on page load) so the server is warm by the time the user uploads.
- */
-export const warmUpBackend = async (): Promise<boolean> => {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 180_000); // 3 minute timeout
-    
-    const response = await fetch(`${API_BASE_URL}/api/health`, {
-      method: 'GET',
-      signal: controller.signal,
-    });
-    
-    clearTimeout(timeoutId);
-    return response.ok;
-  } catch {
-    return false;
-  }
+export const fetchAdminFiles = async (token: string) => {
+  const response = await fetch(`${API_BASE_URL}/api/admin/files?token=${encodeURIComponent(token)}`, {
+    method: 'GET',
+  });
+  if (!response.ok) throw new Error("Unauthorized");
+  return response.json();
 };
