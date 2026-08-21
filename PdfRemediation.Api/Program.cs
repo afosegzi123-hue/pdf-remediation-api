@@ -3,10 +3,6 @@ using PdfRemediation.Api.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Force binding to 0.0.0.0 and use Render's dynamically assigned PORT (default 8080)
-var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
-builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
-
 // Explicitly disable reloadOnChange to prevent inotify exhaustion (Status 139) on Render
 builder.Configuration.Sources.Clear();
 builder.Configuration.AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
