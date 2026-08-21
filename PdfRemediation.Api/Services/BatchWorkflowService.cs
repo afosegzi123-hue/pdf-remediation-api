@@ -95,6 +95,18 @@ public class BatchWorkflowService : IBatchWorkflowService
                     log.ErrorMessage = ex.Message;
                     errorDetails.Add($"{entry.FullName}: {ex.Message} \n {ex.StackTrace}");
                     session.FailedFiles++;
+                    
+                    // Put the original file back so it's not missing
+                    var fallbackEntry = outputArchive.CreateEntry(entry.FullName, CompressionLevel.Fastest);
+                    using var fallbackOut = fallbackEntry.Open();
+                    pdfMemoryStream.Position = 0;
+                    await pdfMemoryStream.CopyToAsync(fallbackOut, cancellationToken);
+                    
+                    // Write the exact error trace to a text file so the user can easily see it
+                    var errorEntry = outputArchive.CreateEntry(entry.FullName + ".error.txt", CompressionLevel.Fastest);
+                    using var errorOut = errorEntry.Open();
+                    using var errorWriter = new StreamWriter(errorOut);
+                    await errorWriter.WriteAsync($"ERROR PROCESSING {entry.FullName}:\n\n{ex.Message}\n\n{ex.StackTrace}");
                 }
                 finally
                 {
