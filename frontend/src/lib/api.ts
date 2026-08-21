@@ -1,21 +1,21 @@
 /**
  * API client to interact with the .NET PDF Remediation Backend.
  * 
- * Uses Next.js rewrites to proxy /api/* requests through the same Vercel domain,
- * completely eliminating CORS issues.
+ * Uses direct cross-origin requests to the Render backend with CORS enabled.
  */
+
+const API_BASE_URL = 'https://pdf-remediation-api.onrender.com';
 
 export const uploadBatchArchive = async (file: File): Promise<Blob> => {
   const formData = new FormData();
   formData.append('file', file);
 
   // Use AbortController with a generous timeout to handle Render free-tier cold starts
-  // (cold starts can take 1-3+ minutes on Render's free plan)
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 300_000); // 5 minute timeout
 
   try {
-    const response = await fetch('/api/remediation/batch', {
+    const response = await fetch(`${API_BASE_URL}/api/remediation/batch`, {
       method: 'POST',
       body: formData,
       signal: controller.signal,
@@ -59,7 +59,7 @@ export const warmUpBackend = async (): Promise<boolean> => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 180_000); // 3 minute timeout
     
-    const response = await fetch('/api/health', {
+    const response = await fetch(`${API_BASE_URL}/api/health`, {
       method: 'GET',
       signal: controller.signal,
     });
