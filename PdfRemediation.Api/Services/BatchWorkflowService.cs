@@ -45,6 +45,7 @@ public class BatchWorkflowService : IBatchWorkflowService
         using (var inputArchive = new ZipArchive(uploadedZipStream, ZipArchiveMode.Read, leaveOpen: true))
         using (var outputArchive = new ZipArchive(outputZipStream, ZipArchiveMode.Create, leaveOpen: true))
         {
+            var errorDetails = new System.Collections.Generic.List<string>();
             foreach (var entry in inputArchive.Entries)
             {
                 if (!entry.FullName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
@@ -92,6 +93,7 @@ public class BatchWorkflowService : IBatchWorkflowService
                 {
                     // Catch individual file failures and log, allowing the loop to continue.
                     log.ErrorMessage = ex.Message;
+                    errorDetails.Add($"{entry.FullName}: {ex.Message} \n {ex.StackTrace}");
                     session.FailedFiles++;
                 }
                 finally
@@ -112,7 +114,8 @@ public class BatchWorkflowService : IBatchWorkflowService
                 TotalFiles = session.TotalFiles,
                 SuccessfulFiles = session.SuccessfulFiles,
                 FailedFiles = session.FailedFiles,
-                CompletedAt = DateTimeOffset.UtcNow
+                CompletedAt = DateTimeOffset.UtcNow,
+                Errors = errorDetails
             };
             await JsonSerializer.SerializeAsync(manifestStream, manifestData, cancellationToken: cancellationToken);
         }
@@ -136,50 +139,39 @@ public class BatchWorkflowService : IBatchWorkflowService
     {
         var outStream = new MemoryStream();
         
-        try 
+        inputPdfStream.Position = 0;
+        
+        // Note: iText7 streams shouldn't be closed here because we want to return outStream
+        var writer = new iText.Kernel.Pdf.PdfWriter(outStream);
+        writer.SetCloseStream(false); // keep outStream open
+        
+        using (var reader = new iText.Kernel.Pdf.PdfReader(inputPdfStream))
+        using (var pdfDoc = new iText.Kernel.Pdf.PdfDocument(reader, writer))
         {
-            inputPdfStream.Position = 0;
-            
-            // Note: iText7 streams shouldn't be closed here because we want to return outStream
-            var writer = new iText.Kernel.Pdf.PdfWriter(outStream);
-            writer.SetCloseStream(false); // keep outStream open
-            
-            using (var reader = new iText.Kernel.Pdf.PdfReader(inputPdfStream))
-            using (var pdfDoc = new iText.Kernel.Pdf.PdfDocument(reader, writer))
-            {
-                // 1. Metadata Normalization
-                var info = pdfDoc.GetDocumentInfo();
-                if (string.IsNullOrEmpty(info.GetTitle())) {
-                    info.SetTitle("Remediated Document");
-                }
-                info.SetCreator("PDF Remediation Suite");
-                
-                // 2. Set Language for Accessibility
-                pdfDoc.GetCatalog().SetLang(new iText.Kernel.Pdf.PdfString("en-US"));
-                
-                // 3. Mark as Tagged PDF (Accessibility requirement)
-                var markInfo = new iText.Kernel.Pdf.PdfDictionary();
-                markInfo.Put(iText.Kernel.Pdf.PdfName.Marked, iText.Kernel.Pdf.PdfBoolean.TRUE);
-                pdfDoc.GetCatalog().GetPdfObject().Put(iText.Kernel.Pdf.PdfName.MarkInfo, markInfo);
-                
-                // 4. Ensure ViewerPreferences has DisplayDocTitle
-                var catalog = pdfDoc.GetCatalog();
-                var catalogObject = catalog.GetPdfObject();
-                var viewerPrefs = catalogObject.GetAsDictionary(iText.Kernel.Pdf.PdfName.ViewerPreferences);
-                if (viewerPrefs == null) {
-                    viewerPrefs = new iText.Kernel.Pdf.PdfDictionary();
-                    catalogObject.Put(iText.Kernel.Pdf.PdfName.ViewerPreferences, viewerPrefs);
-                }
-                viewerPrefs.Put(iText.Kernel.Pdf.PdfName.DisplayDocTitle, iText.Kernel.Pdf.PdfBoolean.TRUE);
+            // 1. Metadata Normalization
+            var info = pdfDoc.GetDocumentInfo();
+            if (string.IsNullOrEmpty(info.GetTitle())) {
+                info.SetTitle("Remediated Document");
             }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"iText7 Processing Error: {ex.Message}");
-            // Fallback: just copy if iText fails
-            inputPdfStream.Position = 0;
-            outStream.SetLength(0);
-            await inputPdfStream.CopyToAsync(outStream, cancellationToken);
+            info.SetCreator("PDF Remediation Suite");
+            
+            // 2. Set Language for Accessibility
+            pdfDoc.GetCatalog().SetLang(new iText.Kernel.Pdf.PdfString("en-US"));
+            
+            // 3. Mark as Tagged PDF (Accessibility requirement)
+            var markInfo = new iText.Kernel.Pdf.PdfDictionary();
+            markInfo.Put(iText.Kernel.Pdf.PdfName.Marked, iText.Kernel.Pdf.PdfBoolean.TRUE);
+            pdfDoc.GetCatalog().GetPdfObject().Put(iText.Kernel.Pdf.PdfName.MarkInfo, markInfo);
+            
+            // 4. Ensure ViewerPreferences has DisplayDocTitle
+            var catalog = pdfDoc.GetCatalog();
+            var catalogObject = catalog.GetPdfObject();
+            var viewerPrefs = catalogObject.GetAsDictionary(iText.Kernel.Pdf.PdfName.ViewerPreferences);
+            if (viewerPrefs == null) {
+                viewerPrefs = new iText.Kernel.Pdf.PdfDictionary();
+                catalogObject.Put(iText.Kernel.Pdf.PdfName.ViewerPreferences, viewerPrefs);
+            }
+            viewerPrefs.Put(iText.Kernel.Pdf.PdfName.DisplayDocTitle, iText.Kernel.Pdf.PdfBoolean.TRUE);
         }
         
         outStream.Position = 0;
