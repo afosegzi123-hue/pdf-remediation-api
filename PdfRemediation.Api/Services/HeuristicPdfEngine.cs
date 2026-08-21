@@ -527,7 +527,8 @@ public class HeuristicPdfEngine
 
                         img.SetMargins(0, 0, 0, 0);
 
-                        var pImg = new iText.Layout.Element.Paragraph(img);
+                        var pImg = new iText.Layout.Element.Paragraph();
+                        pImg.Add(img);
                         pImg.GetAccessibilityProperties().SetRole("Figure");
                         pImg.GetAccessibilityProperties().SetAlternateDescription("Extracted Figure");
                         pImg.SetMargin(0f);
