@@ -13,8 +13,18 @@ builder.Configuration.AddEnvironmentVariables();
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
     ?? Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection");
 
+if (string.IsNullOrEmpty(connectionString))
+{
+    Console.WriteLine("WARNING: ConnectionString is null or empty. Database will fail to connect.");
+}
+
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(connectionString));
+{
+    if (!string.IsNullOrEmpty(connectionString))
+    {
+        options.UseNpgsql(connectionString);
+    }
+});
 
 builder.Services.AddScoped<PdfRemediation.Api.Services.IBatchWorkflowService, PdfRemediation.Api.Services.BatchWorkflowService>();
 
@@ -36,11 +46,23 @@ builder.Services.AddControllers();
 
 var app = builder.Build();
 
-// Automatically create database schema on startup
-using (var scope = app.Services.CreateScope())
+// Automatically create database schema on startup safely
+try
 {
-    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    dbContext.Database.EnsureCreated();
+    using (var scope = app.Services.CreateScope())
+    {
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        if (!string.IsNullOrEmpty(connectionString)) 
+        {
+            Console.WriteLine("Attempting to run Database.EnsureCreated()...");
+            dbContext.Database.EnsureCreated();
+            Console.WriteLine("Database schema verified/created successfully.");
+        }
+    }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"CRITICAL STARTUP ERROR during EnsureCreated: {ex}");
 }
 
 // Configure the HTTP request pipeline.
