@@ -20,14 +20,27 @@ public class BatchWorkflowService : IBatchWorkflowService
 
     public async Task ProcessBatchArchiveAsync(Stream uploadedZipStream, Stream outputZipStream, CancellationToken cancellationToken = default)
     {
-        var session = new BatchSession
+        // Attempt to create a database session, but don't let DB failures block processing
+        BatchSession? session = null;
+        bool dbAvailable = false;
+
+        try
         {
-            Status = "Processing",
-            CreatedAt = DateTimeOffset.UtcNow
-        };
-        
-        _dbContext.BatchSessions.Add(session);
-        await _dbContext.SaveChangesAsync(cancellationToken);
+            session = new BatchSession
+            {
+                Status = "Processing",
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+            
+            _dbContext.BatchSessions.Add(session);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            dbAvailable = true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"WARNING: Database unavailable, processing without logging: {ex.Message}");
+            session = new BatchSession { Status = "Processing", CreatedAt = DateTimeOffset.UtcNow };
+        }
 
         using (var inputArchive = new ZipArchive(uploadedZipStream, ZipArchiveMode.Read, leaveOpen: true))
         using (var outputArchive = new ZipArchive(outputZipStream, ZipArchiveMode.Create, leaveOpen: true))
@@ -53,7 +66,6 @@ public class BatchWorkflowService : IBatchWorkflowService
                     using var entryStream = entry.Open();
                     
                     // We load the single PDF into memory to allow structured parsing (Metadata, Color, OCR, Tags, Structure).
-                    // In a production PDF library, this might also be a stream.
                     using var pdfMemoryStream = new MemoryStream();
                     await entryStream.CopyToAsync(pdfMemoryStream, cancellationToken);
                     pdfMemoryStream.Position = 0;
@@ -71,7 +83,7 @@ public class BatchWorkflowService : IBatchWorkflowService
                     remediatedStream.Position = 0;
                     await remediatedStream.CopyToAsync(outputEntryStream, cancellationToken);
 
-                    log.IsOcrApplied = true; // Set to true per requirements logic if successful
+                    log.IsOcrApplied = true;
                     log.IsStructureRebuilt = true;
                     log.IsAccessibleTagged = true;
                     session.SuccessfulFiles++;
@@ -85,7 +97,10 @@ public class BatchWorkflowService : IBatchWorkflowService
                 finally
                 {
                     log.ProcessingDurationMs = (int)(DateTime.UtcNow - startTime).TotalMilliseconds;
-                    _dbContext.RemediationLogs.Add(log);
+                    if (dbAvailable)
+                    {
+                        _dbContext.RemediationLogs.Add(log);
+                    }
                 }
             }
             
@@ -102,9 +117,19 @@ public class BatchWorkflowService : IBatchWorkflowService
             await JsonSerializer.SerializeAsync(manifestStream, manifestData, cancellationToken: cancellationToken);
         }
 
-        // Commit final status to Db
-        session.Status = "Completed";
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        // Commit final status to Db if available
+        if (dbAvailable)
+        {
+            try
+            {
+                session.Status = "Completed";
+                await _dbContext.SaveChangesAsync(cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"WARNING: Failed to save final session status: {ex.Message}");
+            }
+        }
     }
     
     private async Task<Stream> ApplyRemediationHooksAsync(Stream inputPdfStream, CancellationToken cancellationToken)

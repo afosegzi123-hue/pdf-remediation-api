@@ -24,10 +24,12 @@ export const uploadBatchArchive = async (file: File): Promise<Blob> => {
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      let errorMessage = 'Failed to process the batch archive.';
+      let errorMessage = `Server returned ${response.status} ${response.statusText}.`;
       try {
         const errorData = await response.text();
-        errorMessage = errorData || errorMessage;
+        if (errorData) {
+          errorMessage += ` Details: ${errorData}`;
+        }
       } catch {
         // Ignore
       }
