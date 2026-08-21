@@ -14,6 +14,10 @@ services:
         value: Production
       - key: ASPNETCORE_HTTP_PORTS
         value: "8080"
+      - key: DOTNET_hostBuilder__reloadConfigOnChange
+        value: "false"
+      - key: DOTNET_USE_POLLING_FILE_WATCHER
+        value: "true"
 
 databases:
   - name: pdf-remediation-db
