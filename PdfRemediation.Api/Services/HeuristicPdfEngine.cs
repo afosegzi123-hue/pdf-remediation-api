@@ -38,13 +38,11 @@ public class StructuralEventListener : IEventListener
             var text = textInfo.GetText();
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            // Font size approximation – use ascent/descent when possible.
             var ascent = textInfo.GetAscentLine().GetStartPoint();
             var descent = textInfo.GetDescentLine().GetStartPoint();
             float approxSize = ascent.Get(1) - descent.Get(1);
             if (approxSize <= 0) approxSize = textInfo.GetFontSize();
 
-            // Determine boldness from font name (heuristic).
             var font = textInfo.GetFont();
             var fontProgram = font?.GetFontProgram();
             var fontName = fontProgram?.GetFontNames()?.GetFontName()?.ToLowerInvariant() ?? "";
@@ -96,7 +94,6 @@ public class StructuralEventListener : IEventListener
     }
 }
 
-// Simple fragment used during line assembly.
 public class MergedFragment
 {
     public float X { get; set; }
@@ -106,7 +103,6 @@ public class MergedFragment
     public bool IsBold { get; set; }
 }
 
-// Represents a line of text after merging fragments that belong to the same column.
 public class AssembledLine
 {
     public float Y { get; set; }
@@ -128,21 +124,18 @@ public class HeuristicPdfEngine
         public bool AutoTagStructure { get; set; } = false;
     }
 
-    /// <summary>
-    /// Returns true when a line looks like a heading rather than body text.
-    /// </summary>
     private static bool IsHeaderLine(AssembledLine line, float baseFontSize)
     {
-        // Large font → H1-class
         if (line.MaxFontSize >= baseFontSize + 2f) return true;
-        // Bold + short → H2-class
         if (line.AllBold && line.JoinedText.Length < 80) return true;
         return false;
     }
 
     /// <summary>
-    /// Merge consecutive buffered table rows whose Y‑gap is within normal
-    /// line‑spacing into single rows (handles multi-line cell content).
+    /// Merge consecutive buffered table rows whose Y-gap is within normal
+    /// line-spacing into single rows (handles multi-line cell content).
+    /// Does NOT merge across a style transition (bold→non-bold or font size drop),
+    /// which prevents header rows from absorbing data rows.
     /// </summary>
     private static List<AssembledLine> MergeMultiLineCells(List<AssembledLine> rows, float baseFontSize)
     {
@@ -150,8 +143,6 @@ public class HeuristicPdfEngine
 
         float lineThreshold = Math.Max(baseFontSize * 1.8f, 14f);
         var merged = new List<AssembledLine>();
-
-        // Clone the first row so we can mutate text safely.
         var current = CloneLine(rows[0]);
 
         for (int i = 1; i < rows.Count; i++)
@@ -160,16 +151,20 @@ public class HeuristicPdfEngine
             bool smallGap = yGap < lineThreshold;
             bool sameColCount = current.Columns.Count == rows[i].Columns.Count;
 
-            if (smallGap && sameColCount)
+            // Prevent merging across a style transition (header row → data row).
+            bool boldTransition = current.AllBold && !rows[i].AllBold;
+            bool fontDrop = current.MaxFontSize > rows[i].MaxFontSize + 1.5f;
+            bool styleBreak = boldTransition || fontDrop;
+
+            if (smallGap && sameColCount && !styleBreak)
             {
-                // Continuation of the same logical row → append text.
                 for (int c = 0; c < current.Columns.Count; c++)
                 {
                     string extra = rows[i].Columns[c].Text.Trim();
                     if (!string.IsNullOrEmpty(extra))
                         current.Columns[c].Text += " " + extra;
                 }
-                current.Y = rows[i].Y; // advance Y so the next gap is measured from here
+                current.Y = rows[i].Y;
             }
             else
             {
@@ -226,6 +221,8 @@ public class HeuristicPdfEngine
         for (int pageNum = 1; pageNum <= sourceDoc.GetNumberOfPages(); pageNum++)
         {
             var page = sourceDoc.GetPage(pageNum);
+            float pageWidth = page.GetPageSize().GetWidth();
+
             var listener = new StructuralEventListener();
             var processor = new PdfCanvasProcessor(listener);
             processor.ProcessPageContent(page);
@@ -279,7 +276,7 @@ public class HeuristicPdfEngine
                 {
                     var next = lg.Fragments[i];
                     float gap = next.X - cur.EndX;
-                    if (gap < 15f) // within same column
+                    if (gap < 15f)
                     {
                         cur.Text += (gap > 2f ? " " : "") + next.Text;
                         cur.EndX = next.EndX;
@@ -311,12 +308,10 @@ public class HeuristicPdfEngine
 
             int lineIdx = 0, imgIdx = 0;
 
-            // Running paragraph accumulator.
             var currentParagraph = new List<MergedFragment>();
             float currentX = baseMargin;
             bool currentParaIsHeader = false;
 
-            // Table row buffer.
             var tableRowsBuffer = new List<AssembledLine>();
 
             // ---- Local helpers ----
@@ -331,21 +326,13 @@ public class HeuristicPdfEngine
                 string full = string.Join(" ", currentParagraph.Select(f => f.Text)).Trim();
                 bool isShort = full.Length < 80;
 
-                // Assign structural role.
                 if (maxFont >= baseFontSize + 2f)
-                {
                     p.GetAccessibilityProperties().SetRole("H1");
-                }
                 else if (allBold && isShort)
-                {
                     p.GetAccessibilityProperties().SetRole("H2");
-                }
                 else
-                {
                     p.GetAccessibilityProperties().SetRole("P");
-                }
 
-                // Add text runs preserving per-fragment styling.
                 foreach (var frag in currentParagraph)
                 {
                     var txt = new iText.Layout.Element.Text(frag.Text + " ");
@@ -354,8 +341,21 @@ public class HeuristicPdfEngine
                     p.Add(txt);
                 }
 
-                // Apply indentation only for body paragraphs, not headers.
-                if (!currentParaIsHeader)
+                // ---- Positioning: detect centering or apply indentation ----
+                float paraLeft  = currentParagraph.Min(f => f.X);
+                float paraRight = currentParagraph.Max(f => f.EndX);
+                float leftGap   = paraLeft;
+                float rightGap  = pageWidth - paraRight;
+                // Centered when both gaps are roughly equal and text starts
+                // well to the right of the normal body margin.
+                bool isCentered = Math.Abs(leftGap - rightGap) < 30f
+                                  && paraLeft > baseMargin + 15f;
+
+                if (isCentered)
+                {
+                    p.SetTextAlignment(iText.Layout.Properties.TextAlignment.CENTER);
+                }
+                else
                 {
                     float indent = currentX - baseMargin;
                     if (indent > 5f) p.SetMarginLeft(indent);
@@ -368,15 +368,16 @@ public class HeuristicPdfEngine
 
             void RenderBufferedTable()
             {
+                if (!tableRowsBuffer.Any()) return;
+
                 if (tableRowsBuffer.Count < 2)
                 {
-                    // Not enough rows for a real table – render each as a paragraph.
+                    // Not enough rows – render as paragraphs instead.
                     foreach (var row in tableRowsBuffer)
                     {
                         string text = row.JoinedText;
                         if (string.IsNullOrWhiteSpace(text)) continue;
-                        foreach (var col in row.Columns)
-                            currentParagraph.Add(col);
+                        currentParagraph.AddRange(row.Columns);
                         currentX = row.Columns.First().X;
                         FlushParagraph();
                     }
@@ -386,25 +387,58 @@ public class HeuristicPdfEngine
 
                 FlushParagraph();
 
-                // Merge multi-line cells before rendering.
+                // Merge multi-line cells (respects style transitions).
                 var mergedRows = MergeMultiLineCells(tableRowsBuffer, baseFontSize);
+
+                // Detect whether the first row is a header row.
+                bool firstRowIsHeader = false;
+                if (mergedRows.Count >= 2)
+                {
+                    var first  = mergedRows[0];
+                    var second = mergedRows[1];
+                    bool firstBold   = first.AllBold;
+                    bool secondBold  = second.AllBold;
+                    bool firstLarger = first.MaxFontSize > second.MaxFontSize + 0.5f;
+                    firstRowIsHeader = (firstBold && !secondBold) || firstLarger;
+                }
+
+                // Compute table indentation from the leftmost column across all rows.
+                float tableMinX  = mergedRows.Min(r => r.Columns.First().X);
+                float tableIndent = tableMinX - baseMargin;
 
                 int maxCols = mergedRows.Max(r => r.Columns.Count);
                 var table = new iText.Layout.Element.Table(maxCols);
                 table.SetWidth(iText.Layout.Properties.UnitValue.CreatePercentValue(100));
 
-                foreach (var row in mergedRows)
+                // Apply table-level indentation.
+                if (tableIndent > 5f)
                 {
+                    table.SetMarginLeft(tableIndent);
+                    // Reduce table width so it doesn't overflow the page.
+                    float pctWidth = Math.Max(50f, 100f - (tableIndent / pageWidth * 100f));
+                    table.SetWidth(iText.Layout.Properties.UnitValue.CreatePercentValue(pctWidth));
+                }
+
+                for (int r = 0; r < mergedRows.Count; r++)
+                {
+                    bool isHeaderRow = (r == 0 && firstRowIsHeader);
+                    var row = mergedRows[r];
+
                     foreach (var col in row.Columns)
                     {
                         var cell = new iText.Layout.Element.Cell();
+
+                        // Mark header cells with TH role.
+                        if (isHeaderRow)
+                            cell.GetAccessibilityProperties().SetRole("TH");
+
                         var txt = new iText.Layout.Element.Text(col.Text);
                         if (col.IsBold) txt.SetBold();
                         txt.SetFontSize(col.FontSize);
                         cell.Add(new iText.Layout.Element.Paragraph(txt));
                         table.AddCell(cell);
                     }
-                    // Pad if fewer columns.
+                    // Pad if this row has fewer columns than the widest row.
                     for (int pad = row.Columns.Count; pad < maxCols; pad++)
                         table.AddCell(new iText.Layout.Element.Cell());
                 }
@@ -427,7 +461,6 @@ public class HeuristicPdfEngine
 
                 if (takeImage)
                 {
-                    // Images are atomic – flush everything.
                     FlushParagraph();
                     RenderBufferedTable();
                     var elem = sortedImages[imgIdx++];
@@ -436,7 +469,6 @@ public class HeuristicPdfEngine
                         var imgData = iText.IO.Image.ImageDataFactory.Create(elem.ImageBytes);
                         var img = new iText.Layout.Element.Image(imgData);
 
-                        // Use ScaleAbsolute for pixel-perfect sizing.
                         if (elem.ImageWidth > 0 && elem.ImageHeight > 0)
                             img.ScaleAbsolute(elem.ImageWidth, elem.ImageHeight);
                         else
@@ -464,8 +496,7 @@ public class HeuristicPdfEngine
                         continue;
                     }
 
-                    // ---- Text/header path ----
-                    // Flush any buffered table rows first.
+                    // ---- Text / header path ----
                     RenderBufferedTable();
 
                     string lineText = line.JoinedText;
@@ -473,25 +504,17 @@ public class HeuristicPdfEngine
 
                     bool lineIsHeader = IsHeaderLine(line, baseFontSize);
 
-                    // Decide whether to flush the current paragraph.
                     bool shouldFlush = false;
                     if (currentParagraph.Any())
                     {
-                        // Previous paragraph's properties.
                         string prevText = string.Join(" ", currentParagraph.Select(f => f.Text)).Trim();
                         char lastChar = prevText.Length > 0 ? prevText[prevText.Length - 1] : ' ';
                         bool prevEndsSentence = lastChar == '.' || lastChar == '?'
                                              || lastChar == '!' || lastChar == ':';
 
-                        // Font size shift relative to what's accumulated.
                         float prevAvgFont = currentParagraph.Average(f => f.FontSize);
                         bool fontSizeChanged = Math.Abs(line.MaxFontSize - prevAvgFont) > 1.5f;
 
-                        // Flush when:
-                        //  – entering a header line
-                        //  – leaving a header paragraph
-                        //  – previous text ends a sentence
-                        //  – significant font size change
                         if (lineIsHeader) shouldFlush = true;
                         if (currentParaIsHeader) shouldFlush = true;
                         if (prevEndsSentence) shouldFlush = true;
@@ -501,7 +524,6 @@ public class HeuristicPdfEngine
                     if (shouldFlush)
                         FlushParagraph();
 
-                    // Start of a new paragraph → record indentation and header status.
                     if (!currentParagraph.Any())
                     {
                         currentX = line.Columns.First().X;
