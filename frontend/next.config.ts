@@ -1,10 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "export",
-  images: {
-    unoptimized: true,
-  },
+  // Removed output: 'export' to support standard Vercel serverless deployment
+  images: { unoptimized: true },
 };
 
 export default nextConfig;

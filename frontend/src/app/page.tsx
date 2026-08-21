@@ -95,7 +95,7 @@ export default function Home() {
                 </label>
                 <label className="flex items-center space-x-3">
                   <input type="checkbox" checked={options.auto_tag_structure} onChange={e => setOptions({...options, auto_tag_structure: e.target.checked})} className="form-checkbox h-4 w-4 text-blue-600 rounded border-slate-300" disabled={status !== 'idle'} />
-                  <span className="text-sm text-slate-700">Auto-Tag Structure (AI Deep Layout)</span>
+                  <span className="text-sm text-slate-700">Auto-Tag Structure (Supercharged Option B)</span>
                 </label>
               </div>
 
