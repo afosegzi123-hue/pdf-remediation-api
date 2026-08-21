@@ -50,24 +50,30 @@ builder.Services.AddControllers();
 
 var app = builder.Build();
 
-// Automatically create database schema on startup safely
-try
+// Automatically create database schema in the background to prevent blocking Kestrel startup
+Task.Run(() => 
 {
-    using (var scope = app.Services.CreateScope())
+    try
     {
-        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        if (!string.IsNullOrEmpty(connectionString)) 
+        using (var scope = app.Services.CreateScope())
         {
-            Console.WriteLine("Attempting to run Database.EnsureCreated()...");
-            dbContext.Database.EnsureCreated();
-            Console.WriteLine("Database schema verified/created successfully.");
+            var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            if (!string.IsNullOrEmpty(connectionString)) 
+            {
+                Console.WriteLine("Attempting to run Database.EnsureCreated() in background...");
+                dbContext.Database.EnsureCreated();
+                Console.WriteLine("Database schema verified/created successfully.");
+            }
         }
     }
-}
-catch (Exception ex)
-{
-    Console.WriteLine($"CRITICAL STARTUP ERROR during EnsureCreated: {ex}");
-}
+    catch (Exception ex)
+    {
+        Console.WriteLine($"CRITICAL STARTUP ERROR during EnsureCreated: {ex}");
+    }
+});
+
+// Simple health check endpoint for Render to hit
+app.MapGet("/", () => "PDF Remediation API is Live!");
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
