@@ -11,6 +11,7 @@ builder.Services.AddSwaggerGen();
 
 // Supabase
 builder.Services.AddSingleton<SupabaseService>();
+builder.Services.AddSingleton<HeuristicPdfEngine>();
 
 // Security
 builder.Services.AddSecurityServices(builder.Configuration);
@@ -22,7 +23,6 @@ var supabase = app.Services.GetRequiredService<SupabaseService>();
 await supabase.InitializeAsync();
 
 // Middleware
-app.UseIpRateLimiting();
 app.UseCors("AllowVercel");
 
 app.UseAuthentication();

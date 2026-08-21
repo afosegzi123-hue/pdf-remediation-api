@@ -12,9 +12,9 @@ public class RemediationController : ControllerBase
     private readonly HeuristicPdfEngine _pdfEngine;
     private readonly SupabaseService _supabase;
 
-    public RemediationController(SupabaseService supabase)
+    public RemediationController(SupabaseService supabase, HeuristicPdfEngine pdfEngine)
     {
-        _pdfEngine = new HeuristicPdfEngine();
+        _pdfEngine = pdfEngine;
         _supabase = supabase;
     }
 

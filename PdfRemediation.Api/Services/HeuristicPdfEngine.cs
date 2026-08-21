@@ -1,6 +1,4 @@
 using iText.Kernel.Pdf;
-using Microsoft.ML;
-using Microsoft.ML.Data;
 using System.IO;
 using System.Collections.Generic;
 
@@ -16,46 +14,34 @@ public class TextBlockFeature
 
 public class TextBlockPrediction
 {
-    [ColumnName("PredictedLabel")]
     public string PredictedTag { get; set; } = "";
 }
 
 public class HeuristicPdfEngine
 {
-    private readonly MLContext _mlContext;
-    private readonly PredictionEngine<TextBlockFeature, TextBlockPrediction> _predictionEngine;
-
     public HeuristicPdfEngine()
     {
-        // 1. Initialize ML.NET Context
-        _mlContext = new MLContext(seed: 0);
+    }
+
+    private TextBlockPrediction PredictTag(TextBlockFeature feature)
+    {
+        // Pure lightweight heuristic engine matching the ML.NET dataset
+        string tag = "P";
         
-        // 2. Hardcode a small structural training dataset
-        var trainingData = new List<TextBlockFeature>
+        if (feature.FontSize >= 20f && feature.IsBoldFloat > 0.5f)
         {
-            new TextBlockFeature { FontSize = 24f, IsBoldFloat = 1f, WhitespaceAbove = 20f, TagLabel = "H1" },
-            new TextBlockFeature { FontSize = 20f, IsBoldFloat = 1f, WhitespaceAbove = 15f, TagLabel = "H1" },
-            new TextBlockFeature { FontSize = 18f, IsBoldFloat = 1f, WhitespaceAbove = 15f, TagLabel = "H2" },
-            new TextBlockFeature { FontSize = 16f, IsBoldFloat = 1f, WhitespaceAbove = 10f, TagLabel = "H2" },
-            new TextBlockFeature { FontSize = 14f, IsBoldFloat = 1f, WhitespaceAbove = 10f, TagLabel = "H3" },
-            new TextBlockFeature { FontSize = 12f, IsBoldFloat = 0f, WhitespaceAbove = 5f, TagLabel = "P" },
-            new TextBlockFeature { FontSize = 11f, IsBoldFloat = 0f, WhitespaceAbove = 2f, TagLabel = "P" },
-            new TextBlockFeature { FontSize = 10f, IsBoldFloat = 0f, WhitespaceAbove = 2f, TagLabel = "P" }
-        };
+            tag = "H1";
+        }
+        else if (feature.FontSize >= 16f && feature.IsBoldFloat > 0.5f)
+        {
+            tag = "H2";
+        }
+        else if (feature.FontSize >= 14f && feature.IsBoldFloat > 0.5f)
+        {
+            tag = "H3";
+        }
 
-        var dataView = _mlContext.Data.LoadFromEnumerable(trainingData);
-
-        // 3. Build the Micro-ML Decision Pipeline
-        var pipeline = _mlContext.Transforms.Conversion.MapValueToKey("Label", nameof(TextBlockFeature.TagLabel))
-            .Append(_mlContext.Transforms.Concatenate("Features", nameof(TextBlockFeature.FontSize), nameof(TextBlockFeature.IsBoldFloat), nameof(TextBlockFeature.WhitespaceAbove)))
-            .Append(_mlContext.MulticlassClassification.Trainers.SdcaMaximumEntropy("Label", "Features"))
-            .Append(_mlContext.Transforms.Conversion.MapKeyToValue("PredictedLabel"));
-
-        // 4. Train the lightweight model instantly on server boot
-        var model = pipeline.Fit(dataView);
-
-        // 5. Create the thread-safe Prediction Engine
-        _predictionEngine = _mlContext.Model.CreatePredictionEngine<TextBlockFeature, TextBlockPrediction>(model);
+        return new TextBlockPrediction { PredictedTag = tag };
     }
 
     public class RemediationOptions
@@ -112,8 +98,8 @@ public class HeuristicPdfEngine
                 // In production, we iterate iText's Canvas Parser to get actual font sizes
                 var extractedFeature = new TextBlockFeature { FontSize = 18f, IsBoldFloat = 1.0f, WhitespaceAbove = 12f };
                 
-                // => Use ML.NET to Predict the semantic tag (H1, H2, P)!
-                var prediction = _predictionEngine.Predict(extractedFeature);
+                // => Use the heuristic logic to Predict the semantic tag (H1, H2, P)!
+                var prediction = PredictTag(extractedFeature);
                 
                 // => Inject the predicted structural tag into the PDF structure tree
                 var pdfNameTag = new PdfName(prediction.PredictedTag);
