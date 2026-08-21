@@ -1,14 +1,15 @@
 /**
  * API client to interact with the .NET PDF Remediation Backend.
+ * 
+ * Uses Next.js rewrites to proxy /api/* requests through the same Vercel domain,
+ * completely eliminating CORS issues.
  */
 
 export const uploadBatchArchive = async (file: File): Promise<Blob> => {
-  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5246';
-  
   const formData = new FormData();
   formData.append('file', file);
 
-  const response = await fetch(`${baseUrl}/api/remediation/batch`, {
+  const response = await fetch('/api/remediation/batch', {
     method: 'POST',
     body: formData,
   });
