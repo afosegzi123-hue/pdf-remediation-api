@@ -18,7 +18,6 @@ RUN dotnet publish "PdfRemediation.Api.csproj" -c Release -o /app/publish /p:Use
 # Final Runtime Stage
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-jammy AS final
 WORKDIR /app
-EXPOSE 8080
 ENV DOTNET_USE_POLLING_FILE_WATCHER=1
 COPY --from=publish /app/publish .
 ENTRYPOINT ["dotnet", "PdfRemediation.Api.dll"]
