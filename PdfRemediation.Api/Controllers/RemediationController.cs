@@ -58,6 +58,7 @@ public class RemediationController : ControllerBase
         catch (System.Exception ex)
         {
             Console.WriteLine($"ERROR in ProcessBatch: {ex}");
+            Response.StatusCode = 500;
             return Content($"Internal server error: {ex.Message}", "text/plain");
         }
     }
