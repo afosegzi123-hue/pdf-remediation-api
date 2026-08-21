@@ -190,25 +190,19 @@ public class BatchWorkflowService : IBatchWorkflowService
             }
             viewerPrefs.Put(iText.Kernel.Pdf.PdfName.DisplayDocTitle, iText.Kernel.Pdf.PdfBoolean.TRUE);
             
-            // 5. Initialize an empty Structure Tree so Acrobat recognizes it has a Tag Panel
-            if (!catalogObject.ContainsKey(iText.Kernel.Pdf.PdfName.StructTreeRoot))
+            // 5. Initialize the Structure Tree with a Document root tag so Acrobat Tags panel is active
+            var structTreeRoot = pdfDoc.GetStructTreeRoot();
+            if (structTreeRoot == null) 
             {
-                var structTree = new iText.Kernel.Pdf.PdfDictionary();
-                structTree.Put(iText.Kernel.Pdf.PdfName.Type, iText.Kernel.Pdf.PdfName.StructTreeRoot);
-                catalogObject.Put(iText.Kernel.Pdf.PdfName.StructTreeRoot, structTree);
+                pdfDoc.SetTagged();
+                structTreeRoot = pdfDoc.GetStructTreeRoot();
             }
-
-            // 6. Add a visible Watermark to prove processing was successful
-            var firstPage = pdfDoc.GetFirstPage();
-            if (firstPage != null)
+            
+            if (structTreeRoot != null && structTreeRoot.GetKids().Count == 0)
             {
-                var pdfCanvas = new iText.Kernel.Pdf.Canvas.PdfCanvas(firstPage.NewContentStreamAfter(), firstPage.GetResources(), pdfDoc);
-                pdfCanvas.BeginText()
-                         .SetFontAndSize(iText.Kernel.Font.PdfFontFactory.CreateFont(iText.IO.Font.Constants.StandardFonts.HELVETICA_BOLD), 24)
-                         .SetColor(iText.Kernel.Colors.ColorConstants.RED, true)
-                         .MoveText(50, firstPage.GetPageSize().GetTop() - 50)
-                         .ShowText("REMEDIATED BY AUTOMATED PIPELINE")
-                         .EndText();
+                // Add a single root <Document> tag so the user doesn't see "No tags found"
+                var docElem = new iText.Kernel.Pdf.Tagging.PdfStructElem(pdfDoc, iText.Kernel.Pdf.Tagging.StandardRoles.DOCUMENT);
+                structTreeRoot.AddKid(docElem);
             }
         }
         
