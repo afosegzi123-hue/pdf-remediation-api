@@ -3,6 +3,12 @@ using PdfRemediation.Api.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Explicitly disable reloadOnChange to prevent inotify exhaustion (Status 139) on Render
+builder.Configuration.Sources.Clear();
+builder.Configuration.AddJsonFile("appsettings.json", optional: true, reloadOnChange: false);
+builder.Configuration.AddJsonFile($"appsettings.{builder.Environment.EnvironmentName}.json", optional: true, reloadOnChange: false);
+builder.Configuration.AddEnvironmentVariables();
+
 // Add services to the container.
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
     ?? Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection");
