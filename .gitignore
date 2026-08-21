@@ -4,3 +4,12 @@ obj/
 *.user
 *.suo
 appsettings.Development.json
+# Ignore all project specification markdown files in the root
+prd.md
+agents.md
+data.md
+schema.md
+architecture.md
+skills.md
+prompt.md
+tasks.md

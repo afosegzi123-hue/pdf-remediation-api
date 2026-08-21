@@ -17,7 +17,5 @@ services:
 
 databases:
   - name: pdf-remediation-db
-    databaseName: pdfremediation
-    user: postgres
     plan: standard
     region: ohio
