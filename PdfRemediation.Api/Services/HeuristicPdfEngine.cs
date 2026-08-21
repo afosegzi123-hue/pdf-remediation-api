@@ -111,17 +111,17 @@ public class HeuristicPdfEngine
 
                 if (isShort && isTitleCase && trimmed.EndsWith(":"))
                 {
-                    paragraph.GetAccessibilityProperties().SetRole(PdfName.H1);
+                    paragraph.GetAccessibilityProperties().SetRole("H1");
                     paragraph.SetFontSize(16).SetBold();
                 }
                 else if (isShort && isTitleCase)
                 {
-                    paragraph.GetAccessibilityProperties().SetRole(PdfName.H2);
+                    paragraph.GetAccessibilityProperties().SetRole("H2");
                     paragraph.SetFontSize(14).SetBold();
                 }
                 else
                 {
-                    paragraph.GetAccessibilityProperties().SetRole(PdfName.P);
+                    paragraph.GetAccessibilityProperties().SetRole("P");
                     paragraph.SetFontSize(11);
                 }
 
