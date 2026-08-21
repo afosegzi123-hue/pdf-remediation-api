@@ -30,6 +30,13 @@ builder.Services.AddControllers();
 
 var app = builder.Build();
 
+// Automatically create database schema on startup
+using (var scope = app.Services.CreateScope())
+{
+    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    dbContext.Database.EnsureCreated();
+}
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
