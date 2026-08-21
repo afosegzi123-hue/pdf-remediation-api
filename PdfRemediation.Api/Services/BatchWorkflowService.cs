@@ -61,13 +61,14 @@ public class BatchWorkflowService : IBatchWorkflowService
 
                 var startTime = DateTime.UtcNow;
 
+                MemoryStream? pdfMemoryStream = null;
                 try
                 {
                     // Fault Isolation: Process each file individually wrapped in using statements
                     using var entryStream = entry.Open();
                     
                     // We load the single PDF into memory to allow structured parsing (Metadata, Color, OCR, Tags, Structure).
-                    using var pdfMemoryStream = new MemoryStream();
+                    pdfMemoryStream = new MemoryStream();
                     await entryStream.CopyToAsync(pdfMemoryStream, cancellationToken);
                     pdfMemoryStream.Position = 0;
 
@@ -96,11 +97,14 @@ public class BatchWorkflowService : IBatchWorkflowService
                     errorDetails.Add($"{entry.FullName}: {ex.Message} \n {ex.StackTrace}");
                     session.FailedFiles++;
                     
-                    // Put the original file back so it's not missing
-                    var fallbackEntry = outputArchive.CreateEntry(entry.FullName, CompressionLevel.Fastest);
-                    using var fallbackOut = fallbackEntry.Open();
-                    pdfMemoryStream.Position = 0;
-                    await pdfMemoryStream.CopyToAsync(fallbackOut, cancellationToken);
+                    if (pdfMemoryStream != null)
+                    {
+                        // Put the original file back so it's not missing
+                        var fallbackEntry = outputArchive.CreateEntry(entry.FullName, CompressionLevel.Fastest);
+                        using var fallbackOut = fallbackEntry.Open();
+                        pdfMemoryStream.Position = 0;
+                        await pdfMemoryStream.CopyToAsync(fallbackOut, cancellationToken);
+                    }
                     
                     // Write the exact error trace to a text file so the user can easily see it
                     var errorEntry = outputArchive.CreateEntry(entry.FullName + ".error.txt", CompressionLevel.Fastest);
@@ -110,6 +114,7 @@ public class BatchWorkflowService : IBatchWorkflowService
                 }
                 finally
                 {
+                    pdfMemoryStream?.Dispose();
                     log.ProcessingDurationMs = (int)(DateTime.UtcNow - startTime).TotalMilliseconds;
                     if (dbAvailable)
                     {
