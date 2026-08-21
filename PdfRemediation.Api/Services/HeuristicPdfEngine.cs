@@ -38,10 +38,6 @@ public class StructuralEventListener : IEventListener
             var text = textInfo.GetText();
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            // Accurate Font Size Approximation:
-            // Ascent to descent gives the bounding box height (line height).
-            // Line height is typically ~1.2x the actual point size. We scale it down
-            // by 0.833 to get the true font size, preventing "conspicuously large" fonts.
             var ascent = textInfo.GetAscentLine().GetStartPoint();
             var descent = textInfo.GetDescentLine().GetStartPoint();
             float approxSize = ascent.Get(1) - descent.Get(1);
@@ -138,12 +134,6 @@ public class HeuristicPdfEngine
         return false;
     }
 
-    /// <summary>
-    /// Merge consecutive buffered table rows whose Y-gap is within normal
-    /// line-spacing into single rows (handles multi-line cell content).
-    /// Does NOT merge across a style transition (bold→non-bold or font size drop),
-    /// which prevents header rows from absorbing data rows.
-    /// </summary>
     private static List<AssembledLine> MergeMultiLineCells(List<AssembledLine> rows, float baseFontSize)
     {
         if (rows.Count <= 1) return rows;
@@ -158,7 +148,6 @@ public class HeuristicPdfEngine
             bool smallGap = yGap < lineThreshold;
             bool sameColCount = current.Columns.Count == rows[i].Columns.Count;
 
-            // Prevent merging across a style transition (header row → data row).
             bool boldTransition = current.AllBold && !rows[i].AllBold;
             bool fontDrop = current.MaxFontSize > rows[i].MaxFontSize + 1.5f;
             bool styleBreak = boldTransition || fontDrop;
@@ -236,9 +225,6 @@ public class HeuristicPdfEngine
 
             var textFragments = listener.Elements.Where(e => !e.IsImage).ToList();
 
-            // -----------------------------------------------------------------
-            // 1. Determine baseline margin and base font size for the page.
-            // -----------------------------------------------------------------
             float baseMargin = 0f;
             float baseFontSize = 10f;
             if (textFragments.Any())
@@ -256,9 +242,6 @@ public class HeuristicPdfEngine
                 baseFontSize = (float)(double)fsGrp.Key;
             }
 
-            // -----------------------------------------------------------------
-            // 2. Group fragments by Y (line) and merge close fragments.
-            // -----------------------------------------------------------------
             var lineGroups = textFragments
                 .GroupBy(e => Math.Round(e.Y / 3) * 3)
                 .Select(g => new { Y = (float)g.Key, Fragments = g.OrderBy(e => e.X).ToList() })
@@ -283,7 +266,10 @@ public class HeuristicPdfEngine
                 {
                     var next = lg.Fragments[i];
                     float gap = next.X - cur.EndX;
-                    if (gap < 15f)
+                    
+                    // Increased gap threshold to 25f. Justified text stretches word spacing,
+                    // which was causing standard paragraphs to falsely trigger table logic.
+                    if (gap < 25f)
                     {
                         cur.Text += (gap > 2f ? " " : "") + next.Text;
                         cur.EndX = next.EndX;
@@ -304,9 +290,6 @@ public class HeuristicPdfEngine
                 assembledLines.Add(line);
             }
 
-            // -----------------------------------------------------------------
-            // 3. Sort lines and images top-to-bottom.
-            // -----------------------------------------------------------------
             var sortedLines = assembledLines.OrderByDescending(l => l.Y).ToList();
             var sortedImages = listener.Elements
                 .Where(e => e.IsImage)
@@ -315,22 +298,23 @@ public class HeuristicPdfEngine
 
             int lineIdx = 0, imgIdx = 0;
 
-            var currentParagraph = new List<MergedFragment>();
-            float currentX = baseMargin;
+            // Maintain the actual lines of the paragraph to detect alignment formats
+            var currentParagraphLines = new List<AssembledLine>();
             bool currentParaIsHeader = false;
 
             var tableRowsBuffer = new List<AssembledLine>();
 
-            // ---- Local helpers ----
-
             void FlushParagraph()
             {
-                if (!currentParagraph.Any()) return;
+                if (!currentParagraphLines.Any()) return;
 
                 var p = new iText.Layout.Element.Paragraph();
-                float maxFont = currentParagraph.Max(f => f.FontSize);
-                bool allBold = currentParagraph.All(f => f.IsBold);
-                string full = string.Join(" ", currentParagraph.Select(f => f.Text)).Trim();
+                
+                // Aggregate styles across all lines
+                float maxFont = currentParagraphLines.Max(l => l.MaxFontSize);
+                bool allBold = currentParagraphLines.All(l => l.AllBold);
+                
+                string full = string.Join(" ", currentParagraphLines.Select(l => l.JoinedText)).Trim();
                 bool isShort = full.Length < 80;
 
                 if (maxFont >= baseFontSize + 2f)
@@ -340,35 +324,61 @@ public class HeuristicPdfEngine
                 else
                     p.GetAccessibilityProperties().SetRole("P");
 
-                foreach (var frag in currentParagraph)
+                foreach (var line in currentParagraphLines)
                 {
-                    var txt = new iText.Layout.Element.Text(frag.Text + " ");
-                    if (frag.IsBold) txt.SetBold();
-                    txt.SetFontSize(frag.FontSize);
-                    p.Add(txt);
+                    foreach (var frag in line.Columns)
+                    {
+                        var txt = new iText.Layout.Element.Text(frag.Text + " ");
+                        if (frag.IsBold) txt.SetBold();
+                        txt.SetFontSize(frag.FontSize);
+                        p.Add(txt);
+                    }
                 }
 
-                // ---- Positioning: detect centering or apply indentation ----
-                float paraLeft  = currentParagraph.Min(f => f.X);
-                float paraRight = currentParagraph.Max(f => f.EndX);
-                float leftGap   = paraLeft;
-                float rightGap  = pageWidth - paraRight;
+                // ---- Detect Paragraph Formatting (Justified, Centered, Left) ----
+                bool allLeftsMatch = true;
+                bool allRightsMatch = true;
+                bool allCentersMatch = true;
                 
-                bool isCentered = Math.Abs(leftGap - rightGap) < 30f
-                                  && paraLeft > baseMargin + 15f;
+                float firstLeft = currentParagraphLines.First().Columns.First().X;
+                float firstRight = currentParagraphLines.First().Columns.Last().EndX;
+                float firstCenter = (firstLeft + firstRight) / 2f;
 
-                if (isCentered)
+                for (int i = 0; i < currentParagraphLines.Count; i++)
+                {
+                    var l = currentParagraphLines[i];
+                    float left = l.Columns.First().X;
+                    float right = l.Columns.Last().EndX;
+                    float center = (left + right) / 2f;
+                    
+                    if (Math.Abs(left - firstLeft) > 15f) allLeftsMatch = false;
+                    
+                    // Don't enforce right-match on the last line (justified text is ragged on the last line)
+                    if (i < currentParagraphLines.Count - 1 || currentParagraphLines.Count == 1)
+                    {
+                        if (Math.Abs(right - firstRight) > 20f) allRightsMatch = false;
+                    }
+                    
+                    if (Math.Abs(center - firstCenter) > 20f) allCentersMatch = false;
+                }
+
+                if (currentParagraphLines.Count >= 2 && allLeftsMatch && allRightsMatch)
+                {
+                    p.SetTextAlignment(iText.Layout.Properties.TextAlignment.JUSTIFIED);
+                }
+                else if (allCentersMatch && Math.Abs(firstCenter - (pageWidth / 2f)) < 40f)
                 {
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.CENTER);
                 }
                 else
                 {
-                    float indent = currentX - baseMargin;
-                    if (indent > 5f) p.SetMarginLeft(indent);
+                    // Default Left Aligned with optional indent
+                    float indent = firstLeft - baseMargin;
+                    if (indent > 5f && !currentParaIsHeader) p.SetMarginLeft(indent);
                 }
 
                 layoutDoc.Add(p);
-                currentParagraph.Clear();
+                currentParagraphLines.Clear();
                 currentParaIsHeader = false;
             }
 
@@ -382,8 +392,7 @@ public class HeuristicPdfEngine
                     {
                         string text = row.JoinedText;
                         if (string.IsNullOrWhiteSpace(text)) continue;
-                        currentParagraph.AddRange(row.Columns);
-                        currentX = row.Columns.First().X;
+                        currentParagraphLines.Add(row);
                         FlushParagraph();
                     }
                     tableRowsBuffer.Clear();
@@ -411,7 +420,6 @@ public class HeuristicPdfEngine
                 int maxCols = mergedRows.Max(r => r.Columns.Count);
                 var table = new iText.Layout.Element.Table(maxCols);
                 
-                // Fix table indentation by setting fixed point width and applying margin
                 if (tableIndent > 5f)
                 {
                     table.SetMarginLeft(tableIndent);
@@ -504,37 +512,35 @@ public class HeuristicPdfEngine
                     if (string.IsNullOrWhiteSpace(lineText)) continue;
 
                     bool lineIsHeader = IsHeaderLine(line, baseFontSize);
-                    // Detect if the line starts with a list marker (e.g. •, -, 1., a))
                     bool lineIsListItem = System.Text.RegularExpressions.Regex.IsMatch(lineText, @"^([•○▪\-\*]|\d+\.|[a-zA-Z]\))(\s|$)");
 
                     bool shouldFlush = false;
-                    if (currentParagraph.Any())
+                    if (currentParagraphLines.Any())
                     {
-                        string prevText = string.Join(" ", currentParagraph.Select(f => f.Text)).Trim();
+                        string prevText = currentParagraphLines.Last().JoinedText;
                         char lastChar = prevText.Length > 0 ? prevText[prevText.Length - 1] : ' ';
                         bool prevEndsSentence = lastChar == '.' || lastChar == '?'
                                              || lastChar == '!' || lastChar == ':';
 
-                        float prevAvgFont = currentParagraph.Average(f => f.FontSize);
+                        float prevAvgFont = currentParagraphLines.Average(l => l.MaxFontSize);
                         bool fontSizeChanged = Math.Abs(line.MaxFontSize - prevAvgFont) > 1.5f;
 
                         if (lineIsHeader) shouldFlush = true;
                         if (currentParaIsHeader) shouldFlush = true;
                         if (prevEndsSentence) shouldFlush = true;
                         if (fontSizeChanged) shouldFlush = true;
-                        if (lineIsListItem) shouldFlush = true; // prevent merging list items into paragraphs
+                        if (lineIsListItem) shouldFlush = true; 
                     }
 
                     if (shouldFlush)
                         FlushParagraph();
 
-                    if (!currentParagraph.Any())
+                    if (!currentParagraphLines.Any())
                     {
-                        currentX = line.Columns.First().X;
                         currentParaIsHeader = lineIsHeader;
                     }
 
-                    currentParagraph.AddRange(line.Columns);
+                    currentParagraphLines.Add(line);
                 }
             }
 
