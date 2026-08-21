@@ -72,10 +72,10 @@ public class StructuralEventListener : IEventListener
                 if (image == null) return;
 
                 var ctm = imageInfo.GetImageCtm();
-                float width = Math.Abs(ctm.Get(Matrix.I11));   // rendered width in user units (points)
-                float height = Math.Abs(ctm.Get(Matrix.I22)); // rendered height in points
-                float x = ctm.Get(Matrix.I31);
-                float y = ctm.Get(Matrix.I32) + height; // top edge for sorting
+                float width  = Math.Abs(ctm.Get(Matrix.I11));
+                float height = Math.Abs(ctm.Get(Matrix.I22));
+                float x      = ctm.Get(Matrix.I31);
+                float y      = ctm.Get(Matrix.I32) + height;
 
                 Elements.Add(new PdfElement
                 {
@@ -111,10 +111,10 @@ public class AssembledLine
 {
     public float Y { get; set; }
     public List<MergedFragment> Columns { get; set; } = new List<MergedFragment>();
-    public bool IsTable => Columns.Count >= 2; // consider 2+ columns a potential table row
-    public float MaxFontSize => Columns.Max(c => c.FontSize);
-    public bool AnyBold => Columns.Any(c => c.IsBold);
-    public string JoinedText => string.Join(" ", Columns.Select(c => c.Text));
+    public bool IsTable => Columns.Count >= 2;
+    public float MaxFontSize => Columns.Count > 0 ? Columns.Max(c => c.FontSize) : 0;
+    public bool AllBold => Columns.Count > 0 && Columns.All(c => c.IsBold);
+    public string JoinedText => string.Join(" ", Columns.Select(c => c.Text)).Trim();
 }
 
 public class HeuristicPdfEngine
@@ -126,6 +126,72 @@ public class HeuristicPdfEngine
         public bool NormalizeMetadata { get; set; } = true;
         public bool TagLanguage { get; set; } = true;
         public bool AutoTagStructure { get; set; } = false;
+    }
+
+    /// <summary>
+    /// Returns true when a line looks like a heading rather than body text.
+    /// </summary>
+    private static bool IsHeaderLine(AssembledLine line, float baseFontSize)
+    {
+        // Large font → H1-class
+        if (line.MaxFontSize >= baseFontSize + 2f) return true;
+        // Bold + short → H2-class
+        if (line.AllBold && line.JoinedText.Length < 80) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Merge consecutive buffered table rows whose Y‑gap is within normal
+    /// line‑spacing into single rows (handles multi-line cell content).
+    /// </summary>
+    private static List<AssembledLine> MergeMultiLineCells(List<AssembledLine> rows, float baseFontSize)
+    {
+        if (rows.Count <= 1) return rows;
+
+        float lineThreshold = Math.Max(baseFontSize * 1.8f, 14f);
+        var merged = new List<AssembledLine>();
+
+        // Clone the first row so we can mutate text safely.
+        var current = CloneLine(rows[0]);
+
+        for (int i = 1; i < rows.Count; i++)
+        {
+            float yGap = Math.Abs(current.Y - rows[i].Y);
+            bool smallGap = yGap < lineThreshold;
+            bool sameColCount = current.Columns.Count == rows[i].Columns.Count;
+
+            if (smallGap && sameColCount)
+            {
+                // Continuation of the same logical row → append text.
+                for (int c = 0; c < current.Columns.Count; c++)
+                {
+                    string extra = rows[i].Columns[c].Text.Trim();
+                    if (!string.IsNullOrEmpty(extra))
+                        current.Columns[c].Text += " " + extra;
+                }
+                current.Y = rows[i].Y; // advance Y so the next gap is measured from here
+            }
+            else
+            {
+                merged.Add(current);
+                current = CloneLine(rows[i]);
+            }
+        }
+        merged.Add(current);
+        return merged;
+    }
+
+    private static AssembledLine CloneLine(AssembledLine src)
+    {
+        return new AssembledLine
+        {
+            Y = src.Y,
+            Columns = src.Columns.Select(c => new MergedFragment
+            {
+                X = c.X, EndX = c.EndX, Text = c.Text,
+                FontSize = c.FontSize, IsBold = c.IsBold
+            }).ToList()
+        };
     }
 
     public byte[] ApplyRemediation(byte[] pdfBytes, RemediationOptions options)
@@ -167,39 +233,40 @@ public class HeuristicPdfEngine
             var textFragments = listener.Elements.Where(e => !e.IsImage).ToList();
 
             // -----------------------------------------------------------------
-            // 1️⃣ Determine baseline margin and base font size for the page.
+            // 1. Determine baseline margin and base font size for the page.
             // -----------------------------------------------------------------
             float baseMargin = 0f;
             float baseFontSize = 10f;
             if (textFragments.Any())
             {
-                baseMargin = textFragments
+                var marginGrp = textFragments
                     .GroupBy(f => Math.Round(f.X / 5) * 5)
                     .OrderByDescending(g => g.Count())
-                    .First().Key is double v ? (float)v : 0f;
+                    .First();
+                baseMargin = (float)(double)marginGrp.Key;
 
-                baseFontSize = textFragments
+                var fsGrp = textFragments
                     .GroupBy(f => Math.Round(f.FontSize))
                     .OrderByDescending(g => g.Count())
-                    .First().Key is double fs ? (float)fs : 10f;
+                    .First();
+                baseFontSize = (float)(double)fsGrp.Key;
             }
 
-            // ---------------------------------------------------------------
-            // 2️⃣ Group fragments by Y (line) and merge fragments into columns.
-            // ---------------------------------------------------------------
+            // -----------------------------------------------------------------
+            // 2. Group fragments by Y (line) and merge close fragments.
+            // -----------------------------------------------------------------
             var lineGroups = textFragments
-                .GroupBy(e => Math.Round(e.Y / 3) * 3) // tolerance 3pt vertically
+                .GroupBy(e => Math.Round(e.Y / 3) * 3)
                 .Select(g => new { Y = (float)g.Key, Fragments = g.OrderBy(e => e.X).ToList() })
                 .ToList();
 
             var assembledLines = new List<AssembledLine>();
             foreach (var lg in lineGroups)
             {
-                var line = new AssembledLine { Y = lg.Y };
                 if (!lg.Fragments.Any()) continue;
+                var line = new AssembledLine { Y = lg.Y };
 
-                // Merge fragments that are close horizontally (<=15pt gap) into the same column.
-                var current = new MergedFragment
+                var cur = new MergedFragment
                 {
                     X = lg.Fragments[0].X,
                     EndX = lg.Fragments[0].EndX,
@@ -211,72 +278,74 @@ public class HeuristicPdfEngine
                 for (int i = 1; i < lg.Fragments.Count; i++)
                 {
                     var next = lg.Fragments[i];
-                    float gap = next.X - current.EndX;
-                    if (gap < 15f) // same column, just whitespace or kerning
+                    float gap = next.X - cur.EndX;
+                    if (gap < 15f) // within same column
                     {
-                        current.Text += (gap > 2f ? " " : "") + next.Text;
-                        current.EndX = next.EndX;
-                        if (next.FontSize > current.FontSize) current.FontSize = next.FontSize;
-                        if (next.IsBold) current.IsBold = true;
+                        cur.Text += (gap > 2f ? " " : "") + next.Text;
+                        cur.EndX = next.EndX;
+                        if (next.FontSize > cur.FontSize) cur.FontSize = next.FontSize;
+                        if (next.IsBold) cur.IsBold = true;
                     }
-                    else // new column
+                    else
                     {
-                        line.Columns.Add(current);
-                        current = new MergedFragment
+                        line.Columns.Add(cur);
+                        cur = new MergedFragment
                         {
-                            X = next.X,
-                            EndX = next.EndX,
-                            Text = next.Text,
-                            FontSize = next.FontSize,
-                            IsBold = next.IsBold
+                            X = next.X, EndX = next.EndX, Text = next.Text,
+                            FontSize = next.FontSize, IsBold = next.IsBold
                         };
                     }
                 }
-                line.Columns.Add(current);
+                line.Columns.Add(cur);
                 assembledLines.Add(line);
             }
 
-            // ---------------------------------------------------------------
-            // 3️⃣ Sort lines top‑to‑bottom and images top‑to‑bottom.
-            // ---------------------------------------------------------------
+            // -----------------------------------------------------------------
+            // 3. Sort lines and images top-to-bottom.
+            // -----------------------------------------------------------------
             var sortedLines = assembledLines.OrderByDescending(l => l.Y).ToList();
-            var sortedImages = listener.Elements.Where(e => e.IsImage).OrderByDescending(e => e.Y).ToList();
+            var sortedImages = listener.Elements
+                .Where(e => e.IsImage)
+                .OrderByDescending(e => e.Y)
+                .ToList();
 
             int lineIdx = 0, imgIdx = 0;
+
+            // Running paragraph accumulator.
             var currentParagraph = new List<MergedFragment>();
             float currentX = baseMargin;
+            bool currentParaIsHeader = false;
 
-            // Table construction helpers.
+            // Table row buffer.
             var tableRowsBuffer = new List<AssembledLine>();
-            iText.Layout.Element.Table? currentTable = null;
-            int currentTableCols = 0;
+
+            // ---- Local helpers ----
 
             void FlushParagraph()
             {
                 if (!currentParagraph.Any()) return;
+
                 var p = new iText.Layout.Element.Paragraph();
                 float maxFont = currentParagraph.Max(f => f.FontSize);
-                bool anyBold = currentParagraph.Any(f => f.IsBold);
+                bool allBold = currentParagraph.All(f => f.IsBold);
                 string full = string.Join(" ", currentParagraph.Select(f => f.Text)).Trim();
-                bool isShort = full.Length < 70;
+                bool isShort = full.Length < 80;
 
-                // Header detection based on relative font size.
-                if (maxFont >= baseFontSize + 3f)
+                // Assign structural role.
+                if (maxFont >= baseFontSize + 2f)
                 {
                     p.GetAccessibilityProperties().SetRole("H1");
-                    p.SetFontSize(14).SetBold();
                 }
-                else if (anyBold && isShort && maxFont >= baseFontSize)
+                else if (allBold && isShort)
                 {
                     p.GetAccessibilityProperties().SetRole("H2");
-                    p.SetFontSize(12).SetBold();
                 }
                 else
                 {
                     p.GetAccessibilityProperties().SetRole("P");
-                    p.SetFontSize(11);
                 }
 
+                // Add text runs preserving per-fragment styling.
                 foreach (var frag in currentParagraph)
                 {
                     var txt = new iText.Layout.Element.Text(frag.Text + " ");
@@ -285,149 +354,167 @@ public class HeuristicPdfEngine
                     p.Add(txt);
                 }
 
-                // Apply indentation only when it exceeds a modest threshold.
-                float indent = currentX - baseMargin;
-                if (indent > 5f) p.SetMarginLeft(indent);
+                // Apply indentation only for body paragraphs, not headers.
+                if (!currentParaIsHeader)
+                {
+                    float indent = currentX - baseMargin;
+                    if (indent > 5f) p.SetMarginLeft(indent);
+                }
 
                 layoutDoc.Add(p);
                 currentParagraph.Clear();
+                currentParaIsHeader = false;
             }
 
-            void FlushTable()
+            void RenderBufferedTable()
             {
-                if (currentTable != null)
+                if (tableRowsBuffer.Count < 2)
                 {
-                    currentTable.GetAccessibilityProperties().SetRole("Table");
-                    layoutDoc.Add(currentTable);
-                    currentTable = null;
-                    currentTableCols = 0;
-                }
-            }
-
-            // Helper to start a new table when we have buffered rows.
-            void StartTableIfNeeded()
-            {
-                if (tableRowsBuffer.Count >= 2) // need at least 2 rows to be a real table
-                {
-                    FlushParagraph();
-                    currentTableCols = tableRowsBuffer.Max(r => r.Columns.Count);
-                    currentTable = new iText.Layout.Element.Table(currentTableCols);
-                    currentTable.SetWidth(iText.Layout.Properties.UnitValue.CreatePercentValue(100));
+                    // Not enough rows for a real table – render each as a paragraph.
                     foreach (var row in tableRowsBuffer)
                     {
+                        string text = row.JoinedText;
+                        if (string.IsNullOrWhiteSpace(text)) continue;
                         foreach (var col in row.Columns)
-                        {
-                            var cell = new iText.Layout.Element.Cell();
-                            var txt = new iText.Layout.Element.Text(col.Text);
-                            if (col.IsBold) txt.SetBold();
-                            txt.SetFontSize(col.FontSize);
-                            cell.Add(new iText.Layout.Element.Paragraph(txt));
-                            currentTable.AddCell(cell);
-                        }
-                        // Pad missing cells if this row has fewer columns.
-                        for (int pad = row.Columns.Count; pad < currentTableCols; pad++)
-                            currentTable.AddCell(new iText.Layout.Element.Cell());
+                            currentParagraph.Add(col);
+                        currentX = row.Columns.First().X;
+                        FlushParagraph();
                     }
-                    layoutDoc.Add(currentTable);
+                    tableRowsBuffer.Clear();
+                    return;
                 }
+
+                FlushParagraph();
+
+                // Merge multi-line cells before rendering.
+                var mergedRows = MergeMultiLineCells(tableRowsBuffer, baseFontSize);
+
+                int maxCols = mergedRows.Max(r => r.Columns.Count);
+                var table = new iText.Layout.Element.Table(maxCols);
+                table.SetWidth(iText.Layout.Properties.UnitValue.CreatePercentValue(100));
+
+                foreach (var row in mergedRows)
+                {
+                    foreach (var col in row.Columns)
+                    {
+                        var cell = new iText.Layout.Element.Cell();
+                        var txt = new iText.Layout.Element.Text(col.Text);
+                        if (col.IsBold) txt.SetBold();
+                        txt.SetFontSize(col.FontSize);
+                        cell.Add(new iText.Layout.Element.Paragraph(txt));
+                        table.AddCell(cell);
+                    }
+                    // Pad if fewer columns.
+                    for (int pad = row.Columns.Count; pad < maxCols; pad++)
+                        table.AddCell(new iText.Layout.Element.Cell());
+                }
+
+                table.GetAccessibilityProperties().SetRole("Table");
+                layoutDoc.Add(table);
                 tableRowsBuffer.Clear();
             }
 
-            // ---------------------------------------------------------------
-            // 4️⃣ Merge the streams of lines and images in visual order.
-            // ---------------------------------------------------------------
+            // -----------------------------------------------------------------
+            // 4. Walk lines and images in visual order.
+            // -----------------------------------------------------------------
             while (lineIdx < sortedLines.Count || imgIdx < sortedImages.Count)
             {
                 bool takeImage = false;
                 if (imgIdx < sortedImages.Count && lineIdx < sortedLines.Count)
-                    takeImage = sortedImages[imgIdx].Y > sortedLines[lineIdx].Y; // higher Y means earlier on page (origin bottom)
+                    takeImage = sortedImages[imgIdx].Y > sortedLines[lineIdx].Y;
                 else if (imgIdx < sortedImages.Count)
                     takeImage = true;
 
                 if (takeImage)
                 {
-                    // Images are atomic – flush any pending text structures.
+                    // Images are atomic – flush everything.
                     FlushParagraph();
-                    FlushTable();
+                    RenderBufferedTable();
                     var elem = sortedImages[imgIdx++];
                     try
                     {
                         var imgData = iText.IO.Image.ImageDataFactory.Create(elem.ImageBytes);
                         var img = new iText.Layout.Element.Image(imgData);
-                        // Preserve exact dimensions.
+
+                        // Use ScaleAbsolute for pixel-perfect sizing.
                         if (elem.ImageWidth > 0 && elem.ImageHeight > 0)
-                        {
-                            img.SetWidth(elem.ImageWidth);
-                            img.SetHeight(elem.ImageHeight);
-                        }
+                            img.ScaleAbsolute(elem.ImageWidth, elem.ImageHeight);
                         else
-                        {
                             img.SetMaxWidth(475f);
-                        }
+
                         img.GetAccessibilityProperties().SetRole("Figure");
                         img.GetAccessibilityProperties().SetAlternateDescription("Extracted Figure");
+                        img.SetMargins(0, 0, 0, 0);
+
                         float indent = elem.X - baseMargin;
                         if (indent > 5f) img.SetMarginLeft(indent);
                         layoutDoc.Add(img);
                     }
                     catch { }
                 }
-                else // process a line of text
+                else
                 {
                     var line = sortedLines[lineIdx++];
 
-                    // Determine if this line should be part of a table.
+                    // ---- Table path ----
                     if (line.IsTable)
                     {
-                        // Buffer table rows – we will render only after we see a non‑table line.
+                        FlushParagraph();
                         tableRowsBuffer.Add(line);
+                        continue;
                     }
-                    else
+
+                    // ---- Text/header path ----
+                    // Flush any buffered table rows first.
+                    RenderBufferedTable();
+
+                    string lineText = line.JoinedText;
+                    if (string.IsNullOrWhiteSpace(lineText)) continue;
+
+                    bool lineIsHeader = IsHeaderLine(line, baseFontSize);
+
+                    // Decide whether to flush the current paragraph.
+                    bool shouldFlush = false;
+                    if (currentParagraph.Any())
                     {
-                        // Non‑table line – first flush any buffered table rows.
-                        StartTableIfNeeded();
+                        // Previous paragraph's properties.
+                        string prevText = string.Join(" ", currentParagraph.Select(f => f.Text)).Trim();
+                        char lastChar = prevText.Length > 0 ? prevText[prevText.Length - 1] : ' ';
+                        bool prevEndsSentence = lastChar == '.' || lastChar == '?'
+                                             || lastChar == '!' || lastChar == ':';
 
-                        // Header detection: if this line's max font is significantly larger than base,
-                        // ensure it starts a fresh paragraph (i.e., don't concatenate with previous).
-                        bool isHeader = line.MaxFontSize >= baseFontSize + 3f;
-                        if (isHeader && currentParagraph.Any())
-                        {
-                            // Flush the previous paragraph before starting the header.
-                            FlushParagraph();
-                        }
+                        // Font size shift relative to what's accumulated.
+                        float prevAvgFont = currentParagraph.Average(f => f.FontSize);
+                        bool fontSizeChanged = Math.Abs(line.MaxFontSize - prevAvgFont) > 1.5f;
 
-                        // Merge the column fragments into the running paragraph.
-                        foreach (var frag in line.Columns)
-                        {
-                            if (currentParagraph.Any())
-                            {
-                                var last = currentParagraph.Last();
-                                // If the previous fragment ends with punctuation, start a new paragraph.
-                                char lastChar = last.Text.Length > 0 ? last.Text.Last() : ' ';
-                                if (lastChar != '.' && lastChar != '?' && lastChar != '!' && lastChar != ':' && frag.Text.Length > 20)
-                                {
-                                    currentParagraph.Add(frag);
-                                }
-                                else
-                                {
-                                    FlushParagraph();
-                                    currentParagraph.Add(frag);
-                                    currentX = frag.X;
-                                }
-                            }
-                            else
-                            {
-                                currentParagraph.Add(frag);
-                                currentX = frag.X;
-                            }
-                        }
+                        // Flush when:
+                        //  – entering a header line
+                        //  – leaving a header paragraph
+                        //  – previous text ends a sentence
+                        //  – significant font size change
+                        if (lineIsHeader) shouldFlush = true;
+                        if (currentParaIsHeader) shouldFlush = true;
+                        if (prevEndsSentence) shouldFlush = true;
+                        if (fontSizeChanged) shouldFlush = true;
                     }
+
+                    if (shouldFlush)
+                        FlushParagraph();
+
+                    // Start of a new paragraph → record indentation and header status.
+                    if (!currentParagraph.Any())
+                    {
+                        currentX = line.Columns.First().X;
+                        currentParaIsHeader = lineIsHeader;
+                    }
+
+                    currentParagraph.AddRange(line.Columns);
                 }
             }
 
-            // End of page – flush any remaining structures.
+            // End of page.
             FlushParagraph();
-            StartTableIfNeeded(); // this will render a table if we ended on a table row.
+            RenderBufferedTable();
 
             if (pageNum < sourceDoc.GetNumberOfPages())
                 layoutDoc.Add(new iText.Layout.Element.AreaBreak(iText.Layout.Properties.AreaBreakType.NEXT_PAGE));
