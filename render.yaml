@@ -2,7 +2,7 @@ services:
   - type: web
     name: pdf-remediation-api
     env: docker
-    plan: standard
+    plan: free
     region: ohio
     dockerfilePath: ./Dockerfile
     envVars:
@@ -17,5 +17,5 @@ services:
 
 databases:
   - name: pdf-remediation-db
-    plan: standard
+    plan: free
     region: ohio
