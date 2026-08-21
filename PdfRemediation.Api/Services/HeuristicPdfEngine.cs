@@ -95,11 +95,39 @@ public class HeuristicPdfEngine
             
             string pageText = strategy.GetResultantText();
             var lines = pageText.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            var blocks = new List<string>();
+            var currentParagraph = new System.Text.StringBuilder();
 
             foreach (var line in lines)
             {
                 var trimmed = line.Trim();
                 if (string.IsNullOrEmpty(trimmed)) continue;
+                
+                if (currentParagraph.Length > 0)
+                {
+                    var lastChar = currentParagraph[currentParagraph.Length - 1];
+                    // If previous line doesn't end with a terminator, and current line isn't a short heading, join them
+                    if (lastChar != '.' && lastChar != '?' && lastChar != '!' && lastChar != ':' && trimmed.Length > 20)
+                    {
+                        currentParagraph.Append(" " + trimmed);
+                    }
+                    else
+                    {
+                        blocks.Add(currentParagraph.ToString());
+                        currentParagraph.Clear();
+                        currentParagraph.Append(trimmed);
+                    }
+                }
+                else
+                {
+                    currentParagraph.Append(trimmed);
+                }
+            }
+            if (currentParagraph.Length > 0) blocks.Add(currentParagraph.ToString());
+
+            foreach (var block in blocks)
+            {
+                var trimmed = block.Trim();
 
                 // Heuristic: Is it a heading?
                 var isShort = trimmed.Length < 40;
