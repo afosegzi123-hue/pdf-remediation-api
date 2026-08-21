@@ -209,8 +209,6 @@ public class HeuristicPdfEngine
         pdfDoc.SetTagged();
         var layoutDoc = new iText.Layout.Document(pdfDoc);
         
-        // Strip default margins. We will explicitly position all elements
-        // exactly where they belong using the original absolute bounding boxes.
         layoutDoc.SetMargins(0, 0, 0, 0);
 
         using var sourceReader = new PdfReader(new MemoryStream(pdfBytes));
@@ -311,11 +309,12 @@ public class HeuristicPdfEngine
                 
                 if (previousParaBottomY.HasValue)
                 {
-                    float yGap = Math.Abs(previousParaBottomY.Value - firstLineY);
+                    // Allow negative margins to pull text up alongside images
+                    float yGap = previousParaBottomY.Value - firstLineY; 
                     float standardLineHeight = firstLineFontSize * 1.2f;
                     float extraSpace = yGap - standardLineHeight;
                     
-                    if (extraSpace > 2f)
+                    if (Math.Abs(extraSpace) > 2f)
                     {
                         p.SetMarginTop(extraSpace);
                     }
@@ -327,10 +326,17 @@ public class HeuristicPdfEngine
                 string full = string.Join(" ", currentParagraphLines.Select(l => l.JoinedText)).Trim();
                 bool isShort = full.Length < 80;
 
+                bool isListItem = System.Text.RegularExpressions.Regex.IsMatch(
+                    currentParagraphLines.First().JoinedText, 
+                    @"^([•○▪\-\*]|\d+\.|[a-zA-Z]\))(\s|$)"
+                );
+
                 if (maxFont >= baseFontSize + 2f)
                     p.GetAccessibilityProperties().SetRole("H1");
                 else if (allBold && isShort)
                     p.GetAccessibilityProperties().SetRole("H2");
+                else if (isListItem)
+                    p.GetAccessibilityProperties().SetRole("LI");
                 else
                     p.GetAccessibilityProperties().SetRole("P");
 
@@ -370,8 +376,6 @@ public class HeuristicPdfEngine
                     if (Math.Abs(center - firstCenter) > 20f) allCentersMatch = false;
                 }
 
-                // Instead of guessing relative margins based on other elements,
-                // enforce the exact mathematical bounding box of this specific paragraph.
                 float minLeft = currentParagraphLines.Min(l => l.Columns.First().X);
                 float maxRight = currentParagraphLines.Max(l => l.Columns.Last().EndX);
                 float firstLineIndent = firstLeft - minLeft;
@@ -401,7 +405,6 @@ public class HeuristicPdfEngine
             {
                 if (!tableRowsBuffer.Any()) return;
 
-                // Validate if this is a real table (aligned columns) or just a math equation / noisy line
                 bool isRealTable = false;
                 int maxColsFound = tableRowsBuffer.Max(r => r.Columns.Count);
                 if (maxColsFound >= 2 && tableRowsBuffer.Count >= 2)
@@ -428,7 +431,6 @@ public class HeuristicPdfEngine
 
                 if (!isRealTable)
                 {
-                    // It's likely a math equation or noisy text. Flush it as separate paragraph lines.
                     foreach (var row in tableRowsBuffer)
                     {
                         string text = row.JoinedText;
@@ -455,7 +457,6 @@ public class HeuristicPdfEngine
                     firstRowIsHeader = (firstBold && !secondBold) || firstLarger;
                 }
 
-                // Explicitly set table bounds to original coordinates
                 float tableMinX = mergedRows.Min(r => r.Columns.First().X);
                 float tableMaxX = mergedRows.Max(r => r.Columns.Last().EndX);
                 
@@ -524,19 +525,22 @@ public class HeuristicPdfEngine
                         else
                             img.SetMaxWidth(475f);
 
-                        img.GetAccessibilityProperties().SetRole("Figure");
-                        img.GetAccessibilityProperties().SetAlternateDescription("Extracted Figure");
                         img.SetMargins(0, 0, 0, 0);
 
-                        img.SetMarginLeft(elem.X);
+                        var pImg = new iText.Layout.Element.Paragraph(img);
+                        pImg.GetAccessibilityProperties().SetRole("Figure");
+                        pImg.GetAccessibilityProperties().SetAlternateDescription("Extracted Figure");
+                        pImg.SetMargin(0f);
+                        pImg.SetMarginLeft(elem.X);
                         
                         if (previousParaBottomY.HasValue)
                         {
-                            float yGap = Math.Abs(previousParaBottomY.Value - elem.Y);
-                            if (yGap > 5f) img.SetMarginTop(yGap);
+                            // Negative gaps pull the paragraph up, allowing side-by-side positioning
+                            float yGap = previousParaBottomY.Value - elem.Y; 
+                            if (Math.Abs(yGap) > 2f) pImg.SetMarginTop(yGap);
                         }
                         
-                        layoutDoc.Add(img);
+                        layoutDoc.Add(pImg);
                         previousParaBottomY = elem.Y - (elem.ImageHeight > 0 ? elem.ImageHeight : 100f);
                     }
                     catch { }
@@ -594,7 +598,6 @@ public class HeuristicPdfEngine
                 }
             }
 
-            // End of page.
             FlushParagraph();
             RenderBufferedTable();
             previousParaBottomY = null;
