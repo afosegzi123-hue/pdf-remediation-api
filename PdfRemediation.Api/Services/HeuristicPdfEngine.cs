@@ -58,14 +58,14 @@ public class HeuristicPdfEngine
         using var pdfReader = new PdfReader(inputStream);
         using var pdfWriter = new PdfWriter(outputStream);
         
-        using var pdfDoc = new PdfDocument(pdfReader, pdfWriter);
+        using var pdfDoc = new PdfDocument(pdfWriter);
         
         // 1. Metadata Normalization
         if (options.NormalizeMetadata)
         {
             var info = pdfDoc.GetDocumentInfo();
             info.SetTitle("Remediated Document");
-            info.SetCreator("PDF Remediation Suite API (ML.NET Engine)");
+            info.SetCreator("PDF Remediation Suite API (Supercharged B)");
             info.SetAuthor("Automated System");
         }
 
@@ -78,33 +78,59 @@ public class HeuristicPdfEngine
             var viewerPreferences = new PdfViewerPreferences();
             viewerPreferences.SetDisplayDocTitle(true);
             catalog.SetViewerPreferences(viewerPreferences);
-
-            var markInfo = new PdfDictionary();
-            markInfo.Put(PdfName.Marked, PdfBoolean.TRUE);
-            catalog.Put(PdfName.MarkInfo, markInfo);
         }
 
-        // 3. ML.NET Supercharged Auto-Tagging
-        if (options.AutoTagStructure)
+        // 3. Heuristic Auto-Tagging via Reconstruction
+        pdfDoc.SetTagged();
+        using var layoutDoc = new iText.Layout.Document(pdfDoc);
+
+        // Read text from the original document
+        using var sourceReader = new PdfReader(new MemoryStream(pdfBytes));
+        using var sourceDoc = new PdfDocument(sourceReader);
+
+        for (int i = 1; i <= sourceDoc.GetNumberOfPages(); i++)
         {
-            pdfDoc.SetTagged();
-            var structTreeRoot = pdfDoc.GetStructTreeRoot();
+            var page = sourceDoc.GetPage(i);
+            var strategy = new iText.Kernel.Pdf.Canvas.Parser.Listener.LocationTextExtractionStrategy();
+            var processor = new iText.Kernel.Pdf.Canvas.Parser.PdfCanvasProcessor(strategy);
+            processor.ProcessPageContent(page);
             
-            for (int i = 1; i <= pdfDoc.GetNumberOfPages(); i++)
+            string pageText = strategy.GetResultantText();
+            var lines = pageText.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (var line in lines)
             {
-                var page = pdfDoc.GetPage(i);
+                var trimmed = line.Trim();
+                if (string.IsNullOrEmpty(trimmed)) continue;
+
+                // Heuristic: Is it a heading?
+                var isShort = trimmed.Length < 40;
+                var isTitleCase = trimmed.Length > 0 && char.IsUpper(trimmed[0]);
                 
-                // Example Extracted Text Block from PDF Canvas (Simulated for this demo)
-                // In production, we iterate iText's Canvas Parser to get actual font sizes
-                var extractedFeature = new TextBlockFeature { FontSize = 18f, IsBoldFloat = 1.0f, WhitespaceAbove = 12f };
-                
-                // => Use the heuristic logic to Predict the semantic tag (H1, H2, P)!
-                var prediction = PredictTag(extractedFeature);
-                
-                // => Inject the predicted structural tag into the PDF structure tree
-                var pdfNameTag = new PdfName(prediction.PredictedTag);
-                var structElement = new iText.Kernel.Pdf.Tagging.PdfStructElem(pdfDoc, pdfNameTag);
-                structTreeRoot.AddKid(structElement);
+                var paragraph = new iText.Layout.Element.Paragraph(trimmed);
+
+                if (isShort && isTitleCase && trimmed.EndsWith(":"))
+                {
+                    paragraph.GetAccessibilityProperties().SetRole(PdfName.H1);
+                    paragraph.SetFontSize(16).SetBold();
+                }
+                else if (isShort && isTitleCase)
+                {
+                    paragraph.GetAccessibilityProperties().SetRole(PdfName.H2);
+                    paragraph.SetFontSize(14).SetBold();
+                }
+                else
+                {
+                    paragraph.GetAccessibilityProperties().SetRole(PdfName.P);
+                    paragraph.SetFontSize(11);
+                }
+
+                layoutDoc.Add(paragraph);
+            }
+            
+            if (i < sourceDoc.GetNumberOfPages())
+            {
+                layoutDoc.Add(new iText.Layout.Element.AreaBreak(iText.Layout.Properties.AreaBreakType.NEXT_PAGE));
             }
         }
 
