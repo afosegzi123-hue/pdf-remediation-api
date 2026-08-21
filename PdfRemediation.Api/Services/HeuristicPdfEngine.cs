@@ -38,10 +38,17 @@ public class StructuralEventListener : IEventListener
             var text = textInfo.GetText();
             if (string.IsNullOrWhiteSpace(text)) return;
 
+            // Accurate Font Size Approximation:
+            // Ascent to descent gives the bounding box height (line height).
+            // Line height is typically ~1.2x the actual point size. We scale it down
+            // by 0.833 to get the true font size, preventing "conspicuously large" fonts.
             var ascent = textInfo.GetAscentLine().GetStartPoint();
             var descent = textInfo.GetDescentLine().GetStartPoint();
             float approxSize = ascent.Get(1) - descent.Get(1);
-            if (approxSize <= 0) approxSize = textInfo.GetFontSize();
+            if (approxSize > 0) 
+                approxSize = approxSize * 0.8333f; 
+            else 
+                approxSize = textInfo.GetFontSize();
 
             var font = textInfo.GetFont();
             var fontProgram = font?.GetFontProgram();
@@ -346,8 +353,7 @@ public class HeuristicPdfEngine
                 float paraRight = currentParagraph.Max(f => f.EndX);
                 float leftGap   = paraLeft;
                 float rightGap  = pageWidth - paraRight;
-                // Centered when both gaps are roughly equal and text starts
-                // well to the right of the normal body margin.
+                
                 bool isCentered = Math.Abs(leftGap - rightGap) < 30f
                                   && paraLeft > baseMargin + 15f;
 
@@ -372,7 +378,6 @@ public class HeuristicPdfEngine
 
                 if (tableRowsBuffer.Count < 2)
                 {
-                    // Not enough rows – render as paragraphs instead.
                     foreach (var row in tableRowsBuffer)
                     {
                         string text = row.JoinedText;
@@ -387,10 +392,8 @@ public class HeuristicPdfEngine
 
                 FlushParagraph();
 
-                // Merge multi-line cells (respects style transitions).
                 var mergedRows = MergeMultiLineCells(tableRowsBuffer, baseFontSize);
 
-                // Detect whether the first row is a header row.
                 bool firstRowIsHeader = false;
                 if (mergedRows.Count >= 2)
                 {
@@ -402,21 +405,23 @@ public class HeuristicPdfEngine
                     firstRowIsHeader = (firstBold && !secondBold) || firstLarger;
                 }
 
-                // Compute table indentation from the leftmost column across all rows.
                 float tableMinX  = mergedRows.Min(r => r.Columns.First().X);
                 float tableIndent = tableMinX - baseMargin;
 
                 int maxCols = mergedRows.Max(r => r.Columns.Count);
                 var table = new iText.Layout.Element.Table(maxCols);
-                table.SetWidth(iText.Layout.Properties.UnitValue.CreatePercentValue(100));
-
-                // Apply table-level indentation.
+                
+                // Fix table indentation by setting fixed point width and applying margin
                 if (tableIndent > 5f)
                 {
                     table.SetMarginLeft(tableIndent);
-                    // Reduce table width so it doesn't overflow the page.
-                    float pctWidth = Math.Max(50f, 100f - (tableIndent / pageWidth * 100f));
-                    table.SetWidth(iText.Layout.Properties.UnitValue.CreatePercentValue(pctWidth));
+                    float tableWidth = pageWidth - tableIndent - 40f; 
+                    if (tableWidth < 100f) tableWidth = 100f; // safety bound
+                    table.SetWidth(iText.Layout.Properties.UnitValue.CreatePointValue(tableWidth));
+                }
+                else
+                {
+                    table.SetWidth(iText.Layout.Properties.UnitValue.CreatePercentValue(100));
                 }
 
                 for (int r = 0; r < mergedRows.Count; r++)
@@ -428,7 +433,6 @@ public class HeuristicPdfEngine
                     {
                         var cell = new iText.Layout.Element.Cell();
 
-                        // Mark header cells with TH role.
                         if (isHeaderRow)
                             cell.GetAccessibilityProperties().SetRole("TH");
 
@@ -438,7 +442,6 @@ public class HeuristicPdfEngine
                         cell.Add(new iText.Layout.Element.Paragraph(txt));
                         table.AddCell(cell);
                     }
-                    // Pad if this row has fewer columns than the widest row.
                     for (int pad = row.Columns.Count; pad < maxCols; pad++)
                         table.AddCell(new iText.Layout.Element.Cell());
                 }
@@ -488,7 +491,6 @@ public class HeuristicPdfEngine
                 {
                     var line = sortedLines[lineIdx++];
 
-                    // ---- Table path ----
                     if (line.IsTable)
                     {
                         FlushParagraph();
@@ -496,13 +498,14 @@ public class HeuristicPdfEngine
                         continue;
                     }
 
-                    // ---- Text / header path ----
                     RenderBufferedTable();
 
                     string lineText = line.JoinedText;
                     if (string.IsNullOrWhiteSpace(lineText)) continue;
 
                     bool lineIsHeader = IsHeaderLine(line, baseFontSize);
+                    // Detect if the line starts with a list marker (e.g. •, -, 1., a))
+                    bool lineIsListItem = System.Text.RegularExpressions.Regex.IsMatch(lineText, @"^([•○▪\-\*]|\d+\.|[a-zA-Z]\))(\s|$)");
 
                     bool shouldFlush = false;
                     if (currentParagraph.Any())
@@ -519,6 +522,7 @@ public class HeuristicPdfEngine
                         if (currentParaIsHeader) shouldFlush = true;
                         if (prevEndsSentence) shouldFlush = true;
                         if (fontSizeChanged) shouldFlush = true;
+                        if (lineIsListItem) shouldFlush = true; // prevent merging list items into paragraphs
                     }
 
                     if (shouldFlush)
