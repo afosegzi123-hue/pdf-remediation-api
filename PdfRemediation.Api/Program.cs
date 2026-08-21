@@ -76,7 +76,8 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+// Render handles HTTPS termination, so we don't redirect internally
+// app.UseHttpsRedirection();
 
 // Use CORS before Authorization and Controllers
 app.UseCors("AllowFrontend");
