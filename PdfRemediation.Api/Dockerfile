@@ -1,8 +1,9 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
-COPY ["PdfRemediation.Api.csproj", "."]
-RUN dotnet restore "PdfRemediation.Api.csproj"
+COPY ["PdfRemediation.Api/PdfRemediation.Api.csproj", "PdfRemediation.Api/"]
+RUN dotnet restore "PdfRemediation.Api/PdfRemediation.Api.csproj"
 COPY . .
+WORKDIR /src/PdfRemediation.Api
 RUN dotnet publish "PdfRemediation.Api.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
 FROM ubuntu:22.04 AS runtime

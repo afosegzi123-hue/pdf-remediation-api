@@ -2,7 +2,7 @@ services:
   - type: web
     name: pdf-remediation-api
     env: docker
-    dockerContext: ./PdfRemediation.Api
+    dockerContext: .
     dockerfilePath: ./PdfRemediation.Api/Dockerfile
     plan: free
     healthCheckPath: /api/health
