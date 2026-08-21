@@ -1,13 +1,24 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import UploadDropzone from '@/components/UploadDropzone';
-import { uploadBatchArchive } from '@/lib/api';
+import { uploadBatchArchive, warmUpBackend } from '@/lib/api';
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [status, setStatus] = useState<'idle' | 'uploading' | 'processing' | 'completed' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [backendReady, setBackendReady] = useState(false);
+  const [warmingUp, setWarmingUp] = useState(true);
+
+  // Pre-warm the Render backend on page load so it's ready by the time the user uploads
+  useEffect(() => {
+    setWarmingUp(true);
+    warmUpBackend().then((ready) => {
+      setBackendReady(ready);
+      setWarmingUp(false);
+    });
+  }, []);
 
   const handleFileSelect = (selectedFile: File) => {
     setFile(selectedFile);
@@ -57,6 +68,39 @@ export default function Home() {
             Ensure full WCAG 2.1 AA / Section 508 compliance. Upload a batch ZIP archive containing your PDFs, and our automated engine will apply OCR, normalize metadata, and rebuild structural trees.
           </p>
         </div>
+
+        {/* Backend Status Banner */}
+        {warmingUp && (
+          <div className="p-4 bg-amber-50 text-amber-800 rounded-xl border border-amber-200 text-center animate-pulse">
+            <p className="font-semibold flex items-center justify-center gap-2">
+              <svg className="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              Waking up the backend server...
+            </p>
+            <p className="text-sm mt-1 text-amber-700">
+              Free-tier servers sleep after inactivity. This may take 1-2 minutes on first visit.
+            </p>
+          </div>
+        )}
+
+        {!warmingUp && backendReady && (
+          <div className="p-3 bg-green-50 text-green-800 rounded-xl border border-green-200 text-center">
+            <p className="text-sm font-medium flex items-center justify-center gap-2">
+              <span className="inline-block w-2 h-2 bg-green-500 rounded-full"></span>
+              Backend server is ready
+            </p>
+          </div>
+        )}
+
+        {!warmingUp && !backendReady && (
+          <div className="p-3 bg-red-50 text-red-800 rounded-xl border border-red-200 text-center">
+            <p className="text-sm font-medium">
+              ⚠️ Backend server could not be reached. Processing may fail or take longer than usual.
+            </p>
+          </div>
+        )}
 
         {/* Upload Section */}
         <div className="bg-white shadow-xl shadow-slate-200/50 rounded-3xl p-8 border border-slate-100">

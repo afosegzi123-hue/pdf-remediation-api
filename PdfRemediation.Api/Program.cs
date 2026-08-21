@@ -70,6 +70,7 @@ Task.Run(() =>
 
 // Simple health check endpoint for Render to hit
 app.MapGet("/", () => "PDF Remediation API is Live!");
+app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp = DateTimeOffset.UtcNow }));
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
