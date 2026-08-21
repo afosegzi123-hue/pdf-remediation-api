@@ -1,24 +1,10 @@
 import fitz  # PyMuPDF
 import io
 import time
-import layoutparser as lp
-
-# Initialize AI Model (LayoutParser) lazily so it doesn't crash on boot if RAM is tight
-_layout_model = None
 
 def get_layout_model():
-    global _layout_model
-    if _layout_model is None:
-        try:
-            # Using a lightweight layout model (PubLayNet)
-            _layout_model = lp.Detectron2LayoutModel(
-                config_path='lp://PubLayNet/mask_rcnn_X_101_32x8d_FPN_3x/config',
-                extra_config=["MODEL.ROI_HEADS.SCORE_THRESH_TEST", 0.5],
-                label_map={0: "Text", 1: "Title", 2: "List", 3: "Table", 4: "Figure"}
-            )
-        except Exception as e:
-            print(f"Failed to load AI Layout Model: {e}")
-    return _layout_model
+    # Removed deep AI model to fit within Render's 512MB RAM free tier limit.
+    return None
 
 def apply_remediation(pdf_bytes: bytes, options: dict) -> bytes:
     doc = fitz.open("pdf", pdf_bytes)
