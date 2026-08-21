@@ -28,7 +28,6 @@ public class RemediationController : ControllerBase
     {
         try
         {
-            // Manually extract the file from the request
             if (!Request.HasFormContentType)
             {
                 return Content("Request must be multipart/form-data.", "text/plain");
@@ -47,23 +46,19 @@ public class RemediationController : ControllerBase
                 return Content("Uploaded file must be a ZIP archive.", "text/plain");
             }
 
-            Response.ContentType = "application/zip";
-            Response.Headers.Append("Content-Disposition", "attachment; filename=\"remediated_batch.zip\"");
-
+            // Buffer the output ZIP in memory so we return a clean, complete file
+            using var outputStream = new System.IO.MemoryStream();
             using var uploadStream = file.OpenReadStream();
             
-            await _workflowService.ProcessBatchArchiveAsync(uploadStream, Response.Body, cancellationToken);
-            
-            return new EmptyResult();
+            await _workflowService.ProcessBatchArchiveAsync(uploadStream, outputStream, cancellationToken);
+
+            outputStream.Position = 0;
+            return File(outputStream.ToArray(), "application/zip", "remediated_batch.zip");
         }
         catch (System.Exception ex)
         {
             Console.WriteLine($"ERROR in ProcessBatch: {ex}");
-            if (!Response.HasStarted)
-            {
-                return Content($"Internal server error: {ex.Message}", "text/plain");
-            }
-            return new EmptyResult();
+            return Content($"Internal server error: {ex.Message}", "text/plain");
         }
     }
 }

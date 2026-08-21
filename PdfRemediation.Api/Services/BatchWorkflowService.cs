@@ -43,7 +43,7 @@ public class BatchWorkflowService : IBatchWorkflowService
         }
 
         using (var inputArchive = new ZipArchive(uploadedZipStream, ZipArchiveMode.Read, leaveOpen: true))
-        using (var outputArchive = new ZipArchive(outputZipStream, ZipArchiveMode.Create, leaveOpen: true))
+        using (var outputArchive = new ZipArchive(outputZipStream, ZipArchiveMode.Create, leaveOpen: false))
         {
             foreach (var entry in inputArchive.Entries)
             {
