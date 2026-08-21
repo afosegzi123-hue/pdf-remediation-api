@@ -10,7 +10,6 @@ using System.Linq;
 
 namespace PdfRemediation.Api.Services;
 
-// Represents a single extracted element (text fragment or image) with geometry and style.
 public class PdfElement
 {
     public float Y { get; set; }
@@ -25,7 +24,6 @@ public class PdfElement
     public bool IsBold { get; set; }
 }
 
-// Listener that captures both text and image rendering events.
 public class StructuralEventListener : IEventListener
 {
     public List<PdfElement> Elements { get; } = new List<PdfElement>();
@@ -210,6 +208,10 @@ public class HeuristicPdfEngine
 
         pdfDoc.SetTagged();
         var layoutDoc = new iText.Layout.Document(pdfDoc);
+        
+        // Strip default margins. We will explicitly position all elements
+        // exactly where they belong using the original absolute bounding boxes.
+        layoutDoc.SetMargins(0, 0, 0, 0);
 
         using var sourceReader = new PdfReader(new MemoryStream(pdfBytes));
         using var sourceDoc = new PdfDocument(sourceReader);
@@ -225,24 +227,9 @@ public class HeuristicPdfEngine
 
             var textFragments = listener.Elements.Where(e => !e.IsImage).ToList();
 
-            float baseMargin = 0f;
-            float baseRightMargin = pageWidth - 36f; // rough default for calculating relative right indents
             float baseFontSize = 10f;
-            
             if (textFragments.Any())
             {
-                var marginGrp = textFragments
-                    .GroupBy(f => Math.Round(f.X / 5) * 5)
-                    .OrderByDescending(g => g.Count())
-                    .First();
-                baseMargin = (float)(double)marginGrp.Key;
-                
-                var rightMarginGrp = textFragments
-                    .GroupBy(f => Math.Round(f.EndX / 5) * 5)
-                    .OrderByDescending(g => g.Count())
-                    .First();
-                baseRightMargin = (float)(double)rightMarginGrp.Key;
-
                 var fsGrp = textFragments
                     .GroupBy(f => Math.Round(f.FontSize))
                     .OrderByDescending(g => g.Count())
@@ -316,14 +303,12 @@ public class HeuristicPdfEngine
 
                 var p = new iText.Layout.Element.Paragraph();
                 
-                // Remove default bottom margin to precisely control paragraph spacing
                 p.SetMarginBottom(0f);
                 p.SetMarginTop(0f);
                 
                 float firstLineY = currentParagraphLines.First().Y;
                 float firstLineFontSize = currentParagraphLines.First().MaxFontSize;
                 
-                // Add vertical spacing if there was a visible gap in the original PDF
                 if (previousParaBottomY.HasValue)
                 {
                     float yGap = Math.Abs(previousParaBottomY.Value - firstLineY);
@@ -385,13 +370,17 @@ public class HeuristicPdfEngine
                     if (Math.Abs(center - firstCenter) > 20f) allCentersMatch = false;
                 }
 
-                // Identify structural indents
+                // Instead of guessing relative margins based on other elements,
+                // enforce the exact mathematical bounding box of this specific paragraph.
                 float minLeft = currentParagraphLines.Min(l => l.Columns.First().X);
                 float maxRight = currentParagraphLines.Max(l => l.Columns.Last().EndX);
-                
-                float blockIndent = minLeft - baseMargin;
                 float firstLineIndent = firstLeft - minLeft;
-                float rightIndent = baseRightMargin - maxRight;
+
+                p.SetMarginLeft(minLeft);
+                p.SetMarginRight(pageWidth - maxRight);
+
+                if (firstLineIndent > 5f)
+                    p.SetFirstLineIndent(firstLineIndent);
 
                 if (currentParagraphLines.Count >= 2 && allLeftsMatch && allRightsMatch)
                 {
@@ -400,19 +389,6 @@ public class HeuristicPdfEngine
                 else if (allCentersMatch && Math.Abs(firstCenter - (pageWidth / 2f)) < 40f)
                 {
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.CENTER);
-                }
-
-                // Apply Left, Right, and First-Line Indents
-                if (!currentParaIsHeader)
-                {
-                    if (blockIndent > 5f) 
-                        p.SetMarginLeft(blockIndent);
-                        
-                    if (firstLineIndent > 5f)
-                        p.SetFirstLineIndent(firstLineIndent);
-                        
-                    if (rightIndent > 20f && !allCentersMatch)
-                        p.SetMarginRight(rightIndent);
                 }
 
                 layoutDoc.Add(p);
@@ -425,8 +401,34 @@ public class HeuristicPdfEngine
             {
                 if (!tableRowsBuffer.Any()) return;
 
-                if (tableRowsBuffer.Count < 2)
+                // Validate if this is a real table (aligned columns) or just a math equation / noisy line
+                bool isRealTable = false;
+                int maxColsFound = tableRowsBuffer.Max(r => r.Columns.Count);
+                if (maxColsFound >= 2 && tableRowsBuffer.Count >= 2)
                 {
+                    for (int i = 0; i < tableRowsBuffer.Count - 1; i++)
+                    {
+                        var r1 = tableRowsBuffer[i];
+                        var r2 = tableRowsBuffer[i + 1];
+                        if (r1.Columns.Count >= 2 && r1.Columns.Count == r2.Columns.Count)
+                        {
+                            bool aligned = true;
+                            for (int c = 0; c < r1.Columns.Count; c++)
+                            {
+                                if (Math.Abs(r1.Columns[c].X - r2.Columns[c].X) > 25f)
+                                {
+                                    aligned = false;
+                                    break;
+                                }
+                            }
+                            if (aligned) { isRealTable = true; break; }
+                        }
+                    }
+                }
+
+                if (!isRealTable)
+                {
+                    // It's likely a math equation or noisy text. Flush it as separate paragraph lines.
                     foreach (var row in tableRowsBuffer)
                     {
                         string text = row.JoinedText;
@@ -453,23 +455,17 @@ public class HeuristicPdfEngine
                     firstRowIsHeader = (firstBold && !secondBold) || firstLarger;
                 }
 
-                float tableMinX  = mergedRows.Min(r => r.Columns.First().X);
-                float tableIndent = tableMinX - baseMargin;
-
+                // Explicitly set table bounds to original coordinates
+                float tableMinX = mergedRows.Min(r => r.Columns.First().X);
+                float tableMaxX = mergedRows.Max(r => r.Columns.Last().EndX);
+                
                 int maxCols = mergedRows.Max(r => r.Columns.Count);
                 var table = new iText.Layout.Element.Table(maxCols);
                 
-                if (tableIndent > 5f)
-                {
-                    table.SetMarginLeft(tableIndent);
-                    float tableWidth = pageWidth - tableIndent - 40f; 
-                    if (tableWidth < 100f) tableWidth = 100f;
-                    table.SetWidth(iText.Layout.Properties.UnitValue.CreatePointValue(tableWidth));
-                }
-                else
-                {
-                    table.SetWidth(iText.Layout.Properties.UnitValue.CreatePercentValue(100));
-                }
+                table.SetMarginLeft(tableMinX);
+                float tableWidth = tableMaxX - tableMinX;
+                if (tableWidth < 100f) tableWidth = 100f;
+                table.SetWidth(iText.Layout.Properties.UnitValue.CreatePointValue(tableWidth));
                 
                 table.SetMarginTop(0f);
                 table.SetMarginBottom(0f);
@@ -532,8 +528,7 @@ public class HeuristicPdfEngine
                         img.GetAccessibilityProperties().SetAlternateDescription("Extracted Figure");
                         img.SetMargins(0, 0, 0, 0);
 
-                        float indent = elem.X - baseMargin;
-                        if (indent > 5f) img.SetMarginLeft(indent);
+                        img.SetMarginLeft(elem.X);
                         
                         if (previousParaBottomY.HasValue)
                         {
@@ -570,12 +565,10 @@ public class HeuristicPdfEngine
                     {
                         var lastLineInPara = currentParagraphLines.Last();
                         
-                        // Y-gap detection
                         float lineSpacing = Math.Abs(lastLineInPara.Y - line.Y);
                         float prevAvgFont = currentParagraphLines.Average(l => l.MaxFontSize);
                         bool largeYGap = lineSpacing > (prevAvgFont * 1.6f);
 
-                        // First-line indent detection
                         float paraMinX = currentParagraphLines.Min(l => l.Columns.First().X);
                         bool isIndented = (line.Columns.First().X - paraMinX) > 10f;
                         
