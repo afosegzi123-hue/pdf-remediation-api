@@ -198,10 +198,12 @@ public class BatchWorkflowService : IBatchWorkflowService
                 structTreeRoot = pdfDoc.GetStructTreeRoot();
             }
             
-            if (structTreeRoot != null && structTreeRoot.GetKids().Count == 0)
+            var kids = structTreeRoot?.GetKids();
+            if (structTreeRoot != null && (kids == null || kids.Count == 0))
             {
                 // Add a single root <Document> tag so the user doesn't see "No tags found"
-                var docElem = new iText.Kernel.Pdf.Tagging.PdfStructElem(pdfDoc, iText.Kernel.Pdf.Tagging.StandardRoles.DOCUMENT);
+                var docRole = new iText.Kernel.Pdf.PdfName(iText.Kernel.Pdf.Tagging.StandardRoles.DOCUMENT);
+                var docElem = new iText.Kernel.Pdf.Tagging.PdfStructElem(pdfDoc, docRole);
                 structTreeRoot.AddKid(docElem);
             }
         }
