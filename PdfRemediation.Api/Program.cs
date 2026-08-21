@@ -1,7 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using PdfRemediation.Api.Data;
-// Force load the BouncyCastle adapter assembly so iText reflection finds it
-_ = typeof(iText.Bouncycastle.BouncyCastleFactoryCreator);
 
 var builder = WebApplication.CreateBuilder(args);
 
