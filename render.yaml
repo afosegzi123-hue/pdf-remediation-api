@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: pdf-remediation-api
+    env: docker
+    plan: standard
+    region: ohio
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: ConnectionStrings__DefaultConnection
+        fromDatabase:
+          name: pdf-remediation-db
+          property: connectionString
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: ASPNETCORE_HTTP_PORTS
+        value: "8080"
+
+databases:
+  - name: pdf-remediation-db
+    databaseName: pdfremediation
+    user: postgres
+    plan: standard
+    region: ohio
