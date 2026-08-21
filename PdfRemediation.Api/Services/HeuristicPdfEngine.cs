@@ -11,13 +11,13 @@ public class TextBlockFeature
     public float FontSize { get; set; }
     public float IsBoldFloat { get; set; } 
     public float WhitespaceAbove { get; set; }
-    public string TagLabel { get; set; }
+    public string TagLabel { get; set; } = "";
 }
 
 public class TextBlockPrediction
 {
     [ColumnName("PredictedLabel")]
-    public string PredictedTag { get; set; }
+    public string PredictedTag { get; set; } = "";
 }
 
 public class HeuristicPdfEngine
@@ -117,7 +117,7 @@ public class HeuristicPdfEngine
                 
                 // => Inject the predicted structural tag into the PDF structure tree
                 var pdfNameTag = new PdfName(prediction.PredictedTag);
-                var structElement = new iText.Kernel.Pdf.Tagging.PdfStructElem(structTreeRoot, pdfNameTag);
+                var structElement = new iText.Kernel.Pdf.Tagging.PdfStructElem(pdfDoc, pdfNameTag);
             }
         }
 

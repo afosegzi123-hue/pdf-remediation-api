@@ -34,7 +34,7 @@ public class SupabaseService
         try
         {
             var storage = _client.Storage.From("remediated-pdfs");
-            await storage.Upload(fileBytes, fileName, new FileOptions { Upsert = true });
+            await storage.Upload(fileBytes, fileName);
             return storage.GetPublicUrl(fileName);
         }
         catch (Exception ex)
