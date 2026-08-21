@@ -1,11 +1,10 @@
 using Supabase;
-using Supabase.Storage;
 
 namespace PdfRemediation.Api.Services;
 
 public class SupabaseService
 {
-    private Client? _client;
+    private Supabase.Client? _client;
     private readonly string _url;
     private readonly string _key;
 
