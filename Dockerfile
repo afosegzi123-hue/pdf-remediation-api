@@ -16,7 +16,7 @@ FROM build AS publish
 RUN dotnet publish "PdfRemediation.Api.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
 # Final Runtime Stage
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
+FROM mcr.microsoft.com/dotnet/aspnet:8.0-jammy AS final
 WORKDIR /app
 EXPOSE 8080
 ENV DOTNET_USE_POLLING_FILE_WATCHER=1
