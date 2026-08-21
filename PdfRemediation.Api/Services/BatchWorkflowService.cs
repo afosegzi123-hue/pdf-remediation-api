@@ -172,6 +172,27 @@ public class BatchWorkflowService : IBatchWorkflowService
                 catalogObject.Put(iText.Kernel.Pdf.PdfName.ViewerPreferences, viewerPrefs);
             }
             viewerPrefs.Put(iText.Kernel.Pdf.PdfName.DisplayDocTitle, iText.Kernel.Pdf.PdfBoolean.TRUE);
+            
+            // 5. Initialize an empty Structure Tree so Acrobat recognizes it has a Tag Panel
+            if (!catalogObject.ContainsKey(iText.Kernel.Pdf.PdfName.StructTreeRoot))
+            {
+                var structTree = new iText.Kernel.Pdf.PdfDictionary();
+                structTree.Put(iText.Kernel.Pdf.PdfName.Type, iText.Kernel.Pdf.PdfName.StructTreeRoot);
+                catalogObject.Put(iText.Kernel.Pdf.PdfName.StructTreeRoot, structTree);
+            }
+
+            // 6. Add a visible Watermark to prove processing was successful
+            var firstPage = pdfDoc.GetFirstPage();
+            if (firstPage != null)
+            {
+                var pdfCanvas = new iText.Kernel.Pdf.Canvas.PdfCanvas(firstPage.NewContentStreamAfter(), firstPage.GetResources(), pdfDoc);
+                pdfCanvas.BeginText()
+                         .SetFontAndSize(iText.Kernel.Font.PdfFontFactory.CreateFont(iText.IO.Font.Constants.StandardFonts.HELVETICA_BOLD), 24)
+                         .SetColor(iText.Kernel.Colors.ColorConstants.RED, true)
+                         .MoveText(50, firstPage.GetPageSize().GetTop() - 50)
+                         .ShowText("REMEDIATED BY AUTOMATED PIPELINE")
+                         .EndText();
+            }
         }
         
         outStream.Position = 0;
