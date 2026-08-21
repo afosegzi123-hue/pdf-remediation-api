@@ -104,6 +104,7 @@ public class HeuristicPdfEngine
                 // => Inject the predicted structural tag into the PDF structure tree
                 var pdfNameTag = new PdfName(prediction.PredictedTag);
                 var structElement = new iText.Kernel.Pdf.Tagging.PdfStructElem(pdfDoc, pdfNameTag);
+                structTreeRoot.AddKid(structElement);
             }
         }
 

@@ -22,47 +22,54 @@ public class RemediationController : ControllerBase
     [DisableRequestSizeLimit]
     public async Task<IActionResult> ProcessFile([FromForm] IFormFile file, [FromForm] string optionsJson)
     {
-        if (file == null || file.Length == 0) return BadRequest("File is empty");
-
-        var options = JsonSerializer.Deserialize<HeuristicPdfEngine.RemediationOptions>(optionsJson) 
-                      ?? new HeuristicPdfEngine.RemediationOptions();
-
-        using var memoryStream = new MemoryStream();
-        await file.CopyToAsync(memoryStream);
-        var fileBytes = memoryStream.ToArray();
-
-        // Single PDF
-        if (file.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
+        try 
         {
-            var remediatedBytes = _pdfEngine.ApplyRemediation(fileBytes, options);
-            await _supabase.UploadFileAsync($"remediated_{Guid.NewGuid()}.pdf", remediatedBytes);
-            return File(remediatedBytes, "application/pdf", $"remediated_{file.FileName}");
-        }
-        
-        // Batch ZIP
-        if (file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-        {
-            // ZIP Bomb protection logic here (max 100MB uncompressed)
-            using var outZipStream = new MemoryStream();
-            using (var archive = new ZipArchive(new MemoryStream(fileBytes), ZipArchiveMode.Read))
-            using (var outArchive = new ZipArchive(outZipStream, ZipArchiveMode.Create, true))
+            if (file == null || file.Length == 0) return BadRequest("File is empty");
+
+            var options = JsonSerializer.Deserialize<HeuristicPdfEngine.RemediationOptions>(optionsJson) 
+                          ?? new HeuristicPdfEngine.RemediationOptions();
+
+            using var memoryStream = new MemoryStream();
+            await file.CopyToAsync(memoryStream);
+            var fileBytes = memoryStream.ToArray();
+
+            // Single PDF
+            if (file.FileName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase))
             {
-                foreach (var entry in archive.Entries.Where(e => e.FullName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)))
-                {
-                    using var entryStream = entry.Open();
-                    using var ms = new MemoryStream();
-                    await entryStream.CopyToAsync(ms);
-                    
-                    var remediatedBytes = _pdfEngine.ApplyRemediation(ms.ToArray(), options);
-                    
-                    var newEntry = outArchive.CreateEntry($"remediated_{entry.Name}");
-                    using var newEntryStream = newEntry.Open();
-                    await newEntryStream.WriteAsync(remediatedBytes);
-                }
+                var remediatedBytes = _pdfEngine.ApplyRemediation(fileBytes, options);
+                await _supabase.UploadFileAsync($"remediated_{Guid.NewGuid()}.pdf", remediatedBytes);
+                return File(remediatedBytes, "application/pdf", $"remediated_{file.FileName}");
             }
-            return File(outZipStream.ToArray(), "application/zip", $"remediated_{file.FileName}");
-        }
+            
+            // Batch ZIP
+            if (file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                using var outZipStream = new MemoryStream();
+                using (var archive = new ZipArchive(new MemoryStream(fileBytes), ZipArchiveMode.Read))
+                using (var outArchive = new ZipArchive(outZipStream, ZipArchiveMode.Create, true))
+                {
+                    foreach (var entry in archive.Entries.Where(e => e.FullName.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        using var entryStream = entry.Open();
+                        using var ms = new MemoryStream();
+                        await entryStream.CopyToAsync(ms);
+                        
+                        var remediatedBytes = _pdfEngine.ApplyRemediation(ms.ToArray(), options);
+                        
+                        var newEntry = outArchive.CreateEntry($"remediated_{entry.Name}");
+                        using var newEntryStream = newEntry.Open();
+                        await newEntryStream.WriteAsync(remediatedBytes);
+                    }
+                }
+                return File(outZipStream.ToArray(), "application/zip", $"remediated_{file.FileName}");
+            }
 
-        return BadRequest("Invalid file type.");
+            return BadRequest("Invalid file type.");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"FATAL ERROR in ProcessFile: {ex}");
+            return StatusCode(500, $"Internal Server Error: {ex.Message}");
+        }
     }
 }
