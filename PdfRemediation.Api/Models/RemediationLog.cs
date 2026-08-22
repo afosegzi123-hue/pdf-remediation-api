@@ -14,5 +14,7 @@ namespace PdfRemediation.Api.Models
         public bool IsAccessibleTagged { get; set; }
         public int ProcessingDurationMs { get; set; }
         public string? ErrorMessage { get; set; }
+        public string? RemediatedFileName { get; set; }
+        public string? DownloadUrl { get; set; }
     }
 }

@@ -115,7 +115,8 @@ public class RemediationController : ControllerBase
                 var remediatedBytes = _pdfEngine.ApplyRemediation(fileBytes, options);
                 sw.Stop();
 
-                var publicUrl = await _supabase.UploadFileAsync($"remediated_{Guid.NewGuid()}.pdf", remediatedBytes);
+                var remediatedFileName = $"remediated_{Guid.NewGuid()}.pdf";
+                var publicUrl = await _supabase.UploadFileAsync(remediatedFileName, remediatedBytes);
                 
                 if (db != null) {
                     db.RemediationLogs.Add(new RemediationLog {
@@ -125,7 +126,9 @@ public class RemediationController : ControllerBase
                         IsOcrApplied = false, // Add real logic if needed
                         IsStructureRebuilt = true,
                         IsAccessibleTagged = true,
-                        ProcessingDurationMs = (int)sw.ElapsedMilliseconds
+                        ProcessingDurationMs = (int)sw.ElapsedMilliseconds,
+                        RemediatedFileName = remediatedFileName,
+                        DownloadUrl = publicUrl
                     });
                     session.SuccessfulFiles = 1;
                     session.Status = "Completed";
@@ -161,6 +164,9 @@ public class RemediationController : ControllerBase
                             var remediatedBytes = _pdfEngine.ApplyRemediation(entryBytes, options);
                             sw.Stop();
                             
+                            var remediatedStorageName = $"remediated_{Guid.NewGuid()}.pdf";
+                            var publicUrl = await _supabase.UploadFileAsync(remediatedStorageName, remediatedBytes);
+                            
                             if (db != null) {
                                 db.RemediationLogs.Add(new RemediationLog {
                                     BatchSessionId = session.Id,
@@ -168,7 +174,9 @@ public class RemediationController : ControllerBase
                                     FileSizeBytes = entryBytes.Length,
                                     IsStructureRebuilt = true,
                                     IsAccessibleTagged = true,
-                                    ProcessingDurationMs = (int)sw.ElapsedMilliseconds
+                                    ProcessingDurationMs = (int)sw.ElapsedMilliseconds,
+                                    RemediatedFileName = remediatedStorageName,
+                                    DownloadUrl = publicUrl
                                 });
                                 session.SuccessfulFiles++;
                                 await db.SaveChangesAsync();
