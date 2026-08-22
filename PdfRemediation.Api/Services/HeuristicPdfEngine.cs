@@ -736,26 +736,38 @@ public class HeuristicPdfEngine
                 int maxColsFound = tableRowsBuffer.Max(r => r.Columns.Count);
                 var multiColRows = tableRowsBuffer.Where(r => r.Columns.Count >= 2).ToList();
 
-                if (multiColRows.Count >= 3)
+                // Only classify as a table if we have multiple columns AND they are strictly aligned vertically
+                if (multiColRows.Count >= 2)
                 {
-                    isRealTable = true;
-                }
-                else if (multiColRows.Count == 2 && maxColsFound >= 3)
-                {
-                    isRealTable = true;
-                }
-                else if (multiColRows.Count == 2)
-                {
-                    var r1 = multiColRows[0];
-                    var r2 = multiColRows[1];
-                    bool aligned = true;
-                    int colsToCheck = Math.Min(r1.Columns.Count, r2.Columns.Count);
-                    for (int c = 0; c < colsToCheck; c++)
+                    int alignedPairs = 0;
+                    for (int i = 0; i < multiColRows.Count - 1; i++)
                     {
-                        if (Math.Abs(r1.Columns[c].X - r2.Columns[c].X) > 30f)
-                        { aligned = false; break; }
+                        var r1 = multiColRows[i];
+                        var r2 = multiColRows[i + 1];
+                        
+                        bool aligned = true;
+                        int colsToCheck = Math.Min(r1.Columns.Count, r2.Columns.Count);
+                        // Must have at least 2 columns to even check alignment
+                        if (colsToCheck < 2) continue;
+
+                        for (int c = 0; c < colsToCheck; c++)
+                        {
+                            // Columns must align within 20 points to be considered a real table grid
+                            if (Math.Abs(r1.Columns[c].X - r2.Columns[c].X) > 20f)
+                            { 
+                                aligned = false; 
+                                break; 
+                            }
+                        }
+                        if (aligned) alignedPairs++;
                     }
-                    if (aligned) isRealTable = true;
+
+                    // We need at least 1 aligned pair (i.e. 2 aligned rows) to consider it a table
+                    // But if there are many rows, we want a decent percentage to align
+                    if (alignedPairs >= 1 && (float)alignedPairs / (multiColRows.Count - 1) >= 0.5f)
+                    {
+                        isRealTable = true;
+                    }
                 }
 
                 if (!isRealTable)
