@@ -35,14 +35,13 @@ public class RemediationController : ControllerBase
         
         var parsedHost = "none";
         if (!string.IsNullOrEmpty(dbStr)) {
-            var parts = dbStr.Split(';');
-            parsedHost = parts.FirstOrDefault(p => p.StartsWith("Host=")) ?? "NoHost";
+            parsedHost = dbStr.Length > 15 ? dbStr.Substring(0, 15) : dbStr;
         }
 
         return Ok(new {
             FoundKeys = keys.Where(k => k.Contains("SUPA") || k.Contains("DB_")).ToList(),
             UrlValueLength = configStr?.Length ?? -1,
-            ParsedDbHost = parsedHost
+            DbStringStart = parsedHost
         });
     }
 
