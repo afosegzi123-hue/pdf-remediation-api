@@ -377,23 +377,57 @@ public class HeuristicPdfEngine
                 {
                     foreach (var frag in line.Columns)
                     {
-                        for (int i = 0; i < frag.Elements.Count; i++)
+                        if (!frag.Elements.Any()) continue;
+                        
+                        var currentTextObj = new System.Text.StringBuilder();
+                        var currentElement = frag.Elements[0];
+                        currentTextObj.Append(currentElement.Text);
+                        
+                        for (int i = 1; i < frag.Elements.Count; i++)
                         {
                             var e = frag.Elements[i];
-                            string textToPrint = e.Text;
-                            if (i > 0 && e.X - frag.Elements[i-1].EndX > 2f)
-                                textToPrint = " " + textToPrint;
-                                
-                            var txt = new iText.Layout.Element.Text(textToPrint);
-                            if (e.IsBold) txt.SetBold();
-                            txt.SetFontSize(e.FontSize);
                             
-                            // Emulate superscripts and subscripts by physically raising/lowering the tiny text
-                            if (e.Y > line.Y + 2f) txt.SetTextRise(e.Y - line.Y);
-                            else if (e.Y < line.Y - 2f) txt.SetTextRise(e.Y - line.Y);
+                            bool sameFont = Math.Abs(e.FontSize - currentElement.FontSize) < 0.1f;
+                            bool sameBold = e.IsBold == currentElement.IsBold;
+                            bool sameY = Math.Abs(e.Y - currentElement.Y) < 1f;
+                            
+                            if (sameFont && sameBold && sameY)
+                            {
+                                if (e.X - frag.Elements[i-1].EndX > 2f)
+                                    currentTextObj.Append(" ");
+                                currentTextObj.Append(e.Text);
+                            }
+                            else
+                            {
+                                var txt = new iText.Layout.Element.Text(currentTextObj.ToString());
+                                if (currentElement.IsBold) txt.SetBold();
+                                txt.SetFontSize(currentElement.FontSize);
+                                
+                                if (currentElement.Y > line.Y + 2f) txt.SetTextRise(currentElement.Y - line.Y);
+                                else if (currentElement.Y < line.Y - 2f) txt.SetTextRise(currentElement.Y - line.Y);
+                                
+                                p.Add(txt);
+                                
+                                currentTextObj.Clear();
+                                if (e.X - frag.Elements[i-1].EndX > 2f)
+                                    currentTextObj.Append(" ");
+                                currentTextObj.Append(e.Text);
+                                currentElement = e;
+                            }
+                        }
+                        
+                        if (currentTextObj.Length > 0)
+                        {
+                            var txt = new iText.Layout.Element.Text(currentTextObj.ToString());
+                            if (currentElement.IsBold) txt.SetBold();
+                            txt.SetFontSize(currentElement.FontSize);
+                            
+                            if (currentElement.Y > line.Y + 2f) txt.SetTextRise(currentElement.Y - line.Y);
+                            else if (currentElement.Y < line.Y - 2f) txt.SetTextRise(currentElement.Y - line.Y);
                             
                             p.Add(txt);
                         }
+                        
                         p.Add(new iText.Layout.Element.Text(" "));
                     }
                 }
@@ -538,21 +572,56 @@ public class HeuristicPdfEngine
                             cell.GetAccessibilityProperties().SetRole("TH");
 
                         var pCell = new iText.Layout.Element.Paragraph().SetMargin(0f);
-                        for (int i = 0; i < col.Elements.Count; i++)
+                        if (col.Elements.Any())
                         {
-                            var e = col.Elements[i];
-                            string textToPrint = e.Text;
-                            if (i > 0 && e.X - col.Elements[i-1].EndX > 2f)
-                                textToPrint = " " + textToPrint;
+                            var currentTextObj = new System.Text.StringBuilder();
+                            var currentElement = col.Elements[0];
+                            currentTextObj.Append(currentElement.Text);
+                            
+                            for (int i = 1; i < col.Elements.Count; i++)
+                            {
+                                var e = col.Elements[i];
                                 
-                            var txt = new iText.Layout.Element.Text(textToPrint);
-                            if (e.IsBold) txt.SetBold();
-                            txt.SetFontSize(e.FontSize);
+                                bool sameFont = Math.Abs(e.FontSize - currentElement.FontSize) < 0.1f;
+                                bool sameBold = e.IsBold == currentElement.IsBold;
+                                bool sameY = Math.Abs(e.Y - currentElement.Y) < 1f;
+                                
+                                if (sameFont && sameBold && sameY)
+                                {
+                                    if (e.X - col.Elements[i-1].EndX > 2f)
+                                        currentTextObj.Append(" ");
+                                    currentTextObj.Append(e.Text);
+                                }
+                                else
+                                {
+                                    var txt = new iText.Layout.Element.Text(currentTextObj.ToString());
+                                    if (currentElement.IsBold) txt.SetBold();
+                                    txt.SetFontSize(currentElement.FontSize);
+                                    
+                                    if (currentElement.Y > row.Y + 2f) txt.SetTextRise(currentElement.Y - row.Y);
+                                    else if (currentElement.Y < row.Y - 2f) txt.SetTextRise(currentElement.Y - row.Y);
+                                    
+                                    pCell.Add(txt);
+                                    
+                                    currentTextObj.Clear();
+                                    if (e.X - col.Elements[i-1].EndX > 2f)
+                                        currentTextObj.Append(" ");
+                                    currentTextObj.Append(e.Text);
+                                    currentElement = e;
+                                }
+                            }
                             
-                            if (e.Y > row.Y + 2f) txt.SetTextRise(e.Y - row.Y);
-                            else if (e.Y < row.Y - 2f) txt.SetTextRise(e.Y - row.Y);
-                            
-                            pCell.Add(txt);
+                            if (currentTextObj.Length > 0)
+                            {
+                                var txt = new iText.Layout.Element.Text(currentTextObj.ToString());
+                                if (currentElement.IsBold) txt.SetBold();
+                                txt.SetFontSize(currentElement.FontSize);
+                                
+                                if (currentElement.Y > row.Y + 2f) txt.SetTextRise(currentElement.Y - row.Y);
+                                else if (currentElement.Y < row.Y - 2f) txt.SetTextRise(currentElement.Y - row.Y);
+                                
+                                pCell.Add(txt);
+                            }
                         }
                         cell.Add(pCell);
                         table.AddCell(cell);
