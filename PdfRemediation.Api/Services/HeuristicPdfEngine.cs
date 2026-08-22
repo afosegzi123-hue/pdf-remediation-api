@@ -568,9 +568,13 @@ public class HeuristicPdfEngine
                 bool isPageFooter = firstLineY < 72f;
                 bool isMarginalia = isPageHeader || isPageFooter;
 
-                if (isMarginalia)
+                if (isPageHeader)
                 {
-                    p.GetAccessibilityProperties().SetRole(iText.Kernel.Pdf.Tagging.StandardRoles.ARTIFACT);
+                    p.GetAccessibilityProperties().SetRole("Header");
+                }
+                else if (isPageFooter)
+                {
+                    p.GetAccessibilityProperties().SetRole("Footer");
                 }
                 else if (maxFont >= baseFontSize + 2f)
                     p.GetAccessibilityProperties().SetRole("H1");
