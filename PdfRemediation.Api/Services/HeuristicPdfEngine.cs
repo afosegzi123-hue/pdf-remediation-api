@@ -325,6 +325,10 @@ public class HeuristicPdfEngine
 
         pdfDoc.SetTagged();
         
+        // Custom roles must be mapped to standard roles in a Tagged PDF to prevent iText validation errors.
+        pdfDoc.GetStructTreeRoot().GetRoleMap().AddMapping("Header", iText.Kernel.Pdf.Tagging.StandardRoles.NONSTRUCT);
+        pdfDoc.GetStructTreeRoot().GetRoleMap().AddMapping("Footer", iText.Kernel.Pdf.Tagging.StandardRoles.NONSTRUCT);
+        
         var layoutDoc = new iText.Layout.Document(pdfDoc);
         layoutDoc.SetMargins(0, 0, 0, 0);
 
