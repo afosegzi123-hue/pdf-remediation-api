@@ -468,18 +468,15 @@ public class HeuristicPdfEngine
 
                 bool allLeftsMatch = true;
                 bool allRightsMatch = true;
-                bool allCentersMatch = true;
                 
                 float firstLeft = currentParagraphLines.First().Columns.First().X;
                 float firstRight = currentParagraphLines.First().Columns.Last().EndX;
-                float firstCenter = (firstLeft + firstRight) / 2f;
 
                 for (int i = 0; i < currentParagraphLines.Count; i++)
                 {
                     var l = currentParagraphLines[i];
                     float left = l.Columns.First().X;
                     float right = l.Columns.Last().EndX;
-                    float center = (left + right) / 2f;
                     
                     if (Math.Abs(left - firstLeft) > 15f) allLeftsMatch = false;
                     
@@ -487,8 +484,6 @@ public class HeuristicPdfEngine
                     {
                         if (Math.Abs(right - firstRight) > 20f) allRightsMatch = false;
                     }
-                    
-                    if (Math.Abs(center - firstCenter) > 20f) allCentersMatch = false;
                 }
 
                 float minLeft = currentParagraphLines.Min(l => l.Columns.First().X);
