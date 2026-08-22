@@ -880,8 +880,9 @@ public class HeuristicPdfEngine
                 
                 // Draw the table from the TOP down, so if it expands, it flows downwards and never crushes text above it
                 var rect = new iText.Kernel.Geom.Rectangle(tableMinX, 0, tableBlockWidth, tableTopY);
-                using var canvas = new iText.Layout.Canvas(pdfDoc.GetPage(pageNum), rect);
+                var canvas = new iText.Layout.Canvas(pdfDoc.GetPage(pageNum), rect);
                 canvas.Add(table);
+                canvas.Close();
 
                 previousParaBottomY = tableRowsBuffer.Last().Y;
                 tableRowsBuffer.Clear();
