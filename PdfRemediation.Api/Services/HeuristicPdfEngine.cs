@@ -347,8 +347,18 @@ public class HeuristicPdfEngine
         for (int pageNum = 1; pageNum <= sourceDoc.GetNumberOfPages(); pageNum++)
         {
             var page = sourceDoc.GetPage(pageNum);
-            float pageWidth = page.GetPageSize().GetWidth();
-            float pageHeight = page.GetPageSize().GetHeight();
+            var pageSize = page.GetPageSize();
+            
+            // Create the page explicitly in the output document to match source dimensions and margins
+            var newPage = pdfDoc.AddNewPage(new iText.Kernel.Geom.PageSize(pageSize));
+            var cropBox = page.GetCropBox();
+            if (cropBox != null) {
+                newPage.SetCropBox(cropBox);
+            }
+            newPage.SetRotation(page.GetRotation());
+
+            float pageWidth = pageSize.GetWidth();
+            float pageHeight = pageSize.GetHeight();
 
             var listener = new StructuralEventListener();
             var processor = new PdfCanvasProcessor(listener);
