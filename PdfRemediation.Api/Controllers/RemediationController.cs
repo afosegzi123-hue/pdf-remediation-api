@@ -41,9 +41,14 @@ public class RemediationController : ControllerBase
             // DB Logging Setup
             var db = _serviceProvider.GetService<AppDbContext>();
             var session = new BatchSession { TotalFiles = 1, Status = "Processing" };
-            if (db != null) {
-                db.BatchSessions.Add(session);
-                await db.SaveChangesAsync();
+            try {
+                if (db != null) {
+                    db.BatchSessions.Add(session);
+                    await db.SaveChangesAsync();
+                }
+            } catch (Exception ex) {
+                Console.WriteLine("DB Logging disabled/failed: " + ex.Message);
+                db = null; // Disable DB for the rest of this request
             }
 
             // Single PDF
@@ -132,16 +137,24 @@ public class RemediationController : ControllerBase
         catch (Exception ex)
         {
             Console.WriteLine($"FATAL ERROR in ProcessFile: {ex}");
-            var db = _serviceProvider.GetService<AppDbContext>();
-            if (db != null)
+            try
             {
-                var session = db.BatchSessions.OrderByDescending(b => b.CreatedAt).FirstOrDefault();
-                if (session != null && session.Status == "Processing")
+                var db = _serviceProvider.GetService<AppDbContext>();
+                if (db != null)
                 {
-                    session.Status = "Failed";
-                    db.SaveChanges();
+                    var session = db.BatchSessions.OrderByDescending(b => b.CreatedAt).FirstOrDefault();
+                    if (session != null && session.Status == "Processing")
+                    {
+                        session.Status = "Failed";
+                        db.SaveChanges();
+                    }
                 }
             }
+            catch (Exception innerEx)
+            {
+                Console.WriteLine($"DB Failure during catch: {innerEx.Message}");
+            }
+            
             return StatusCode(500, $"Internal Server Error: {ex.Message}");
         }
     }
