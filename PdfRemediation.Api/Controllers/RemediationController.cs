@@ -23,6 +23,21 @@ public class RemediationController : ControllerBase
         _serviceProvider = serviceProvider;
     }
 
+    [HttpGet("debug-env")]
+    public IActionResult DebugEnv()
+    {
+        var envs = Environment.GetEnvironmentVariables();
+        var keys = new List<string>();
+        foreach(var key in envs.Keys) keys.Add(key.ToString());
+        
+        var configStr = _serviceProvider.GetService<IConfiguration>()?["SUPABASE_URL"];
+
+        return Ok(new {
+            FoundKeys = keys.Where(k => k.Contains("SUPA") || k.Contains("DB_")).ToList(),
+            UrlValueLength = configStr?.Length ?? -1
+        });
+    }
+
     [HttpGet("diagnostics")]
     public async Task<IActionResult> RunDiagnostics()
     {
