@@ -568,25 +568,20 @@ public class HeuristicPdfEngine
                 else
                     p.GetAccessibilityProperties().SetRole("P");
 
-                // Render each line, preserving original line breaks with \n
+                // Render each line, allowing natural text flow
                 for (int lineIndex = 0; lineIndex < currentParagraphLines.Count; lineIndex++)
                 {
                     var line = currentParagraphLines[lineIndex];
-                    bool isLastLine = (lineIndex == currentParagraphLines.Count - 1);
 
                     for (int colIdx = 0; colIdx < line.Columns.Count; colIdx++)
                     {
                         var frag = line.Columns[colIdx];
                         bool isLastCol = (colIdx == line.Columns.Count - 1);
-                        // Append space between columns within the same line
-                        bool appendSpace = !isLastCol;
+                        bool isLastLine = (lineIndex == currentParagraphLines.Count - 1);
+                        
+                        // Append space between columns and between lines
+                        bool appendSpace = !(isLastCol && isLastLine);
                         RenderFragmentsIntoParagraph(p, frag, line.Y, appendSpace);
-                    }
-
-                    // Preserve original line breaks: insert \n between lines (not after last)
-                    if (!isLastLine)
-                    {
-                        p.Add(new iText.Layout.Element.Text("\n"));
                     }
                 }
 
