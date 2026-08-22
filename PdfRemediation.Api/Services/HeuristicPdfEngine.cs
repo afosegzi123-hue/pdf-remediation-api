@@ -157,8 +157,15 @@ public class HeuristicPdfEngine
                     string extra = rows[i].Columns[c].Text.Trim();
                     if (!string.IsNullOrEmpty(extra))
                         current.Columns[c].Text += " " + extra;
+                        
+                    // Important: if we absorb a row (e.g. superscript absorbed by normal text), keep the larger font size
+                    if (rows[i].Columns[c].FontSize > current.Columns[c].FontSize)
+                        current.Columns[c].FontSize = rows[i].Columns[c].FontSize;
+                        
+                    if (rows[i].Columns[c].IsBold)
+                        current.Columns[c].IsBold = true;
                 }
-                current.Y = rows[i].Y;
+                current.Y = rows[i].Y; // Adopt the lower Y to keep correct text flow
             }
             else
             {
@@ -235,35 +242,58 @@ public class HeuristicPdfEngine
                 baseFontSize = (float)(double)fsGrp.Key;
             }
 
-            var lineGroups = textFragments
-                .GroupBy(e => Math.Round(e.Y / 3) * 3)
-                .Select(g => new { Y = (float)g.Key, Fragments = g.OrderBy(e => e.X).ToList() })
-                .ToList();
+            // Instead of rigid mathematical buckets, naturally group fragments that are on the same Y-line.
+            // This safely catches superscripts and subscripts within 6 points of the baseline.
+            var sortedFragments = textFragments.OrderByDescending(e => e.Y).ToList();
+            var lineGroupsList = new List<List<PdfElement>>();
+            if (sortedFragments.Any())
+            {
+                var currentGroup = new List<PdfElement> { sortedFragments[0] };
+                lineGroupsList.Add(currentGroup);
+                float currentY = sortedFragments[0].Y;
+
+                for (int i = 1; i < sortedFragments.Count; i++)
+                {
+                    if (Math.Abs(currentY - sortedFragments[i].Y) < 6f)
+                    {
+                        currentGroup.Add(sortedFragments[i]);
+                    }
+                    else
+                    {
+                        currentGroup = new List<PdfElement> { sortedFragments[i] };
+                        lineGroupsList.Add(currentGroup);
+                        currentY = sortedFragments[i].Y;
+                    }
+                }
+            }
 
             var assembledLines = new List<AssembledLine>();
-            foreach (var lg in lineGroups)
+            foreach (var group in lineGroupsList)
             {
-                if (!lg.Fragments.Any()) continue;
-                var line = new AssembledLine { Y = lg.Y };
+                if (!group.Any()) continue;
+                
+                var fragments = group.OrderBy(e => e.X).ToList();
+                var line = new AssembledLine { Y = fragments[0].Y };
 
                 var cur = new MergedFragment
                 {
-                    X = lg.Fragments[0].X,
-                    EndX = lg.Fragments[0].EndX,
-                    Text = lg.Fragments[0].Text,
-                    FontSize = lg.Fragments[0].FontSize,
-                    IsBold = lg.Fragments[0].IsBold
+                    X = fragments[0].X,
+                    EndX = fragments[0].EndX,
+                    Text = fragments[0].Text,
+                    FontSize = fragments[0].FontSize,
+                    IsBold = fragments[0].IsBold
                 };
 
-                for (int i = 1; i < lg.Fragments.Count; i++)
+                for (int i = 1; i < fragments.Count; i++)
                 {
-                    var next = lg.Fragments[i];
+                    var next = fragments[i];
                     float gap = next.X - cur.EndX;
                     
                     if (gap < 25f)
                     {
                         cur.Text += (gap > 2f ? " " : "") + next.Text;
                         cur.EndX = next.EndX;
+                        // Superscripts have smaller fonts, preserve the larger font of the normal text
                         if (next.FontSize > cur.FontSize) cur.FontSize = next.FontSize;
                         if (next.IsBold) cur.IsBold = true;
                     }
@@ -412,34 +442,33 @@ public class HeuristicPdfEngine
 
                 bool isRealTable = false;
                 int maxColsFound = tableRowsBuffer.Max(r => r.Columns.Count);
-                if (tableRowsBuffer.Count >= 2 && maxColsFound >= 2)
+                
+                // Strictly require multiple valid multi-column rows to prevent text paragraphs with a single wide gap from being labeled a table
+                var multiColRows = tableRowsBuffer.Where(r => r.Columns.Count >= 2).ToList();
+
+                if (multiColRows.Count >= 3)
                 {
-                    if (tableRowsBuffer.Count >= 3)
+                    isRealTable = true;
+                }
+                else if (multiColRows.Count == 2 && maxColsFound >= 3)
+                {
+                    isRealTable = true;
+                }
+                else if (multiColRows.Count == 2)
+                {
+                    var r1 = multiColRows[0];
+                    var r2 = multiColRows[1];
+                    bool aligned = true;
+                    int colsToCheck = Math.Min(r1.Columns.Count, r2.Columns.Count);
+                    for (int c = 0; c < colsToCheck; c++)
                     {
-                        isRealTable = true;
-                    }
-                    else if (maxColsFound >= 3)
-                    {
-                        isRealTable = true;
-                    }
-                    else
-                    {
-                        var r1 = tableRowsBuffer[0];
-                        var r2 = tableRowsBuffer[1];
-                        if (r1.Columns.Count >= 2 && r2.Columns.Count >= 2)
+                        if (Math.Abs(r1.Columns[c].X - r2.Columns[c].X) > 30f)
                         {
-                            bool aligned = true;
-                            for (int c = 0; c < Math.Min(r1.Columns.Count, r2.Columns.Count); c++)
-                            {
-                                if (Math.Abs(r1.Columns[c].X - r2.Columns[c].X) > 30f)
-                                {
-                                    aligned = false;
-                                    break;
-                                }
-                            }
-                            if (aligned) isRealTable = true;
+                            aligned = false;
+                            break;
                         }
                     }
+                    if (aligned) isRealTable = true;
                 }
 
                 if (!isRealTable)
