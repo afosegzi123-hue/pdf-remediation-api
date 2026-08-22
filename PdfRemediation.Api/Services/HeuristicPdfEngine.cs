@@ -829,9 +829,7 @@ public class HeuristicPdfEngine
                 var table = new iText.Layout.Element.Table(colUnitWidths);
 
                 float tableMinX = mergedRows.Min(r => r.Columns.First().X);
-                table.SetMarginLeft(tableMinX);
-                table.SetMarginTop(0f);
-                table.SetMarginBottom(0f);
+                table.SetMargin(0f);
 
                 for (int r = 0; r < mergedRows.Count; r++)
                 {
@@ -877,11 +875,14 @@ public class HeuristicPdfEngine
 
                 table.GetAccessibilityProperties().SetRole("Table");
                 
-                float tableBottomY = mergedRows.Last().Y - (baseFontSize * 0.2f);
+                float tableTopY = mergedRows.First().Y + (baseFontSize * 1.2f);
                 float tableBlockWidth = pageWidth - tableMinX;
-                table.SetFixedPosition(pageNum, tableMinX, tableBottomY, tableBlockWidth);
+                
+                // Draw the table from the TOP down, so if it expands, it flows downwards and never crushes text above it
+                var rect = new iText.Kernel.Geom.Rectangle(tableMinX, 0, tableBlockWidth, tableTopY);
+                using var canvas = new iText.Layout.Canvas(pdfDoc.GetPage(pageNum), rect);
+                canvas.Add(table);
 
-                layoutDoc.Add(table);
                 previousParaBottomY = tableRowsBuffer.Last().Y;
                 tableRowsBuffer.Clear();
             }
@@ -919,7 +920,6 @@ public class HeuristicPdfEngine
                         pImg.GetAccessibilityProperties().SetRole("Figure");
                         pImg.GetAccessibilityProperties().SetAlternateDescription("Extracted Figure");
                         pImg.SetMargin(0f);
-                        pImg.SetMarginLeft(elem.X);
 
                         float imgBottomY = elem.Y - (elem.ImageHeight > 0 ? elem.ImageHeight : 0f);
                         pImg.SetFixedPosition(pageNum, elem.X, imgBottomY, pageWidth - elem.X);
