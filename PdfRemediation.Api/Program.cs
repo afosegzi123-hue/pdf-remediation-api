@@ -15,8 +15,13 @@ builder.Services.AddSwaggerGen();
 var dbConnectionString = builder.Configuration["DB_CONNECTION_STRING"];
 if (!string.IsNullOrEmpty(dbConnectionString))
 {
+    if (!dbConnectionString.Contains("Pooling=false")) {
+        dbConnectionString = dbConnectionString.TrimEnd(';') + ";Pooling=false;";
+    }
     builder.Services.AddDbContext<AppDbContext>(options =>
-        options.UseNpgsql(dbConnectionString));
+        options.UseNpgsql(dbConnectionString, sqlOptions => {
+            sqlOptions.EnableRetryOnFailure();
+        }));
 }
 
 // Supabase
