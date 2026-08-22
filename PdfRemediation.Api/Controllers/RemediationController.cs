@@ -31,10 +31,18 @@ public class RemediationController : ControllerBase
         foreach(var key in envs.Keys) keys.Add(key.ToString());
         
         var configStr = _serviceProvider.GetService<IConfiguration>()?["SUPABASE_URL"];
+        var dbStr = _serviceProvider.GetService<IConfiguration>()?["DB_CONNECTION_STRING"];
+        
+        var parsedHost = "none";
+        if (!string.IsNullOrEmpty(dbStr)) {
+            var parts = dbStr.Split(';');
+            parsedHost = parts.FirstOrDefault(p => p.StartsWith("Host=")) ?? "NoHost";
+        }
 
         return Ok(new {
             FoundKeys = keys.Where(k => k.Contains("SUPA") || k.Contains("DB_")).ToList(),
-            UrlValueLength = configStr?.Length ?? -1
+            UrlValueLength = configStr?.Length ?? -1,
+            ParsedDbHost = parsedHost
         });
     }
 
