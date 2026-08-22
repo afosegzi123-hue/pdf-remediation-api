@@ -645,13 +645,18 @@ public class HeuristicPdfEngine
                 for (int i = 0; i < currentParagraphLines.Count; i++)
                 {
                     var l = currentParagraphLines[i];
-                    if (Math.Abs(l.Columns.First().X - currentParagraphLines.First().Columns.First().X) > 15f) 
-                        allLeftsMatch = false;
+                    
+                    // Exclude the FIRST line from the left-margin check if it has a first-line indent
+                    if (i > 0 || firstLineIndent <= 5f)
+                    {
+                        if (Math.Abs(l.Columns.First().X - minLeft) > 15f) 
+                            allLeftsMatch = false;
+                    }
                     
                     // Exclude the last line from the right-margin check, as it is naturally short
                     if (i < currentParagraphLines.Count - 1 || currentParagraphLines.Count == 1)
                     {
-                        if (Math.Abs(l.Columns.Last().EndX - currentParagraphLines.First().Columns.Last().EndX) > 20f) 
+                        if (Math.Abs(maxRight - l.Columns.Last().EndX) > 20f) 
                             allRightsMatch = false;
                     }
                 }
@@ -669,29 +674,28 @@ public class HeuristicPdfEngine
 
                 // ----- Apply True Alignment and Dynamic Bounding Boxes -----
                 float bottomY = currentParagraphLines.Last().Y - (firstLineFontSize * 0.2f);
+                float blockWidth = maxRight - minLeft + 3f; // Exact width with tiny slack
 
                 if (isJustified) 
                 {
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.JUSTIFIED);
-                    float blockWidth = maxRight - minLeft + 2f; // Exact width with tiny slack
                     p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth);
                 }
                 else if (isCentered) 
                 {
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.CENTER);
-                    p.SetFixedPosition(pageNum, 0, bottomY, pageWidth); // Full page width, centered automatically
+                    p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth);
                 }
                 else if (isRightAligned)
                 {
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.RIGHT);
-                    p.SetFixedPosition(pageNum, 0, bottomY, maxRight + 2f); // Bounded to the right edge
+                    p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth);
                 }
                 else 
                 {
                     // Default to Left Aligned
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.LEFT);
-                    float blockWidth = pageWidth - minLeft; // Maximum width to prevent premature wrapping
-                    p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth);
+                    p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth + 5f); // Slightly more slack to prevent wrapping
                 }
 
                 layoutDoc.Add(p);
