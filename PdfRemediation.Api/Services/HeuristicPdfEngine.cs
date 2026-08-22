@@ -633,33 +633,48 @@ public class HeuristicPdfEngine
                 }
 
                 // ----- Alignment Detection -----
-                float minLeft = currentParagraphLines.Min(l => l.Columns.First().X);
-                float maxRight = currentParagraphLines.Max(l => l.Columns.Last().EndX);
-                float firstLineIndent = currentParagraphLines.First().Columns.First().X - minLeft;
+                // Calculate robust left/right margins using medians to ignore stray trailing spaces or outliers
+                var allLefts = currentParagraphLines.Select(l => l.Columns.First().X).OrderBy(x => x).ToList();
+                var allRights = currentParagraphLines.Select(l => l.Columns.Last().EndX).OrderBy(x => x).ToList();
+                
+                float medianLeft = allLefts[allLefts.Count / 2];
+                float medianRight = allRights[allRights.Count / 2];
+                
+                // Allow minLeft/maxRight to just be the robust medians for bounding box purposes
+                float minLeft = medianLeft;
+                float maxRight = medianRight;
 
+                float firstLineIndent = currentParagraphLines.First().Columns.First().X - medianLeft;
                 if (firstLineIndent > 5f)
                     p.SetFirstLineIndent(firstLineIndent);
 
-                bool allLeftsMatch = true;
-                bool allRightsMatch = true;
+                int matchingLefts = 0;
+                int matchingRights = 0;
+                int rightCheckCount = 0;
+                int leftCheckCount = 0;
+
                 for (int i = 0; i < currentParagraphLines.Count; i++)
                 {
                     var l = currentParagraphLines[i];
                     
-                    // Exclude the FIRST line from the left-margin check if it has a first-line indent
                     if (i > 0 || firstLineIndent <= 5f)
                     {
-                        if (Math.Abs(l.Columns.First().X - minLeft) > 15f) 
-                            allLeftsMatch = false;
+                        leftCheckCount++;
+                        if (Math.Abs(l.Columns.First().X - medianLeft) <= 15f) 
+                            matchingLefts++;
                     }
                     
-                    // Exclude the last line from the right-margin check, as it is naturally short
                     if (i < currentParagraphLines.Count - 1 || currentParagraphLines.Count == 1)
                     {
-                        if (Math.Abs(maxRight - l.Columns.Last().EndX) > 20f) 
-                            allRightsMatch = false;
+                        rightCheckCount++;
+                        if (Math.Abs(l.Columns.Last().EndX - medianRight) <= 20f) 
+                            matchingRights++;
                     }
                 }
+                
+                // If 80% of lines match the median margins, consider it justified/aligned
+                bool allLeftsMatch = leftCheckCount > 0 && ((float)matchingLefts / leftCheckCount) >= 0.8f;
+                bool allRightsMatch = rightCheckCount > 0 && ((float)matchingRights / rightCheckCount) >= 0.8f;
                 
                 bool isJustified = (currentParagraphLines.Count >= 2 && allLeftsMatch && allRightsMatch);
                 bool isRightAligned = (currentParagraphLines.Count >= 2 && !allLeftsMatch && allRightsMatch);
