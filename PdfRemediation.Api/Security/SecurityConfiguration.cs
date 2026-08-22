@@ -51,7 +51,8 @@ public static class SecurityConfiguration
             {
                 builder.WithOrigins(
                     "http://localhost:3000",
-                    "https://pdf-remediation-api-moon.vercel.app" // Vercel Permlink
+                    "https://pdf-remediation-api-moon.vercel.app", // Original Vercel Permlink
+                    "https://pdf-remediation.electedbooks.com"     // User Custom Domain
                 )
                 .AllowAnyMethod()
                 .AllowAnyHeader();
