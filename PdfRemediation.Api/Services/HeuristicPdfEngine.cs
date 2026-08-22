@@ -174,35 +174,6 @@ public class HeuristicPdfEngine
         public bool AutoTagStructure { get; set; } = false;
     }
 
-    private class HeaderFooterEventHandler : IEventHandler
-    {
-        public Dictionary<int, iText.Layout.Element.Paragraph> Headers { get; } = new Dictionary<int, iText.Layout.Element.Paragraph>();
-        public Dictionary<int, iText.Layout.Element.Paragraph> Footers { get; } = new Dictionary<int, iText.Layout.Element.Paragraph>();
-
-        public void HandleEvent(Event currentEvent)
-        {
-            var docEvent = (PdfDocumentEvent)currentEvent;
-            var pdfDoc = docEvent.GetDocument();
-            var page = docEvent.GetPage();
-            int pageNum = pdfDoc.GetPageNumber(page);
-
-            var canvas = new PdfCanvas(page.NewContentStreamBefore(), page.GetResources(), pdfDoc);
-            var layoutCanvas = new iText.Layout.Canvas(canvas, page.GetPageSize());
-
-            // Try to find the header for this page, or fallback to the last known header
-            var header = Headers.ContainsKey(pageNum) ? Headers[pageNum] : Headers.Values.LastOrDefault();
-            if (header != null)
-                layoutCanvas.Add(header);
-
-            // Try to find the footer for this page, or fallback to the last known footer
-            var footer = Footers.ContainsKey(pageNum) ? Footers[pageNum] : Footers.Values.LastOrDefault();
-            if (footer != null)
-                layoutCanvas.Add(footer);
-
-            layoutCanvas.Close();
-        }
-    }
-
     private static bool IsHeaderLine(AssembledLine line, float baseFontSize)
     {
         if (line.MaxFontSize >= baseFontSize + 2f) return true;
@@ -354,12 +325,8 @@ public class HeuristicPdfEngine
 
         pdfDoc.SetTagged();
         
-        var headerFooterHandler = new HeaderFooterEventHandler();
-        pdfDoc.AddEventHandler(PdfDocumentEvent.END_PAGE, headerFooterHandler);
-
         var layoutDoc = new iText.Layout.Document(pdfDoc);
-        // Reserve 75pt at top and bottom for the absolute headers and footers so body text doesn't overlap them
-        layoutDoc.SetMargins(75f, 0, 75f, 0);
+        layoutDoc.SetMargins(0, 0, 0, 0);
 
         // Font cache shared across all pages
         var fontCache = new Dictionary<string, iText.Kernel.Font.PdfFont>();
@@ -614,113 +581,74 @@ public class HeuristicPdfEngine
                 else
                     p.GetAccessibilityProperties().SetRole("P");
 
-                // Render each line, allowing natural text flow
+                // Calculate exact line spacing to preserve original paragraph height
+                float avgSpacing = firstLineFontSize * 1.2f;
+                if (currentParagraphLines.Count >= 2)
+                {
+                    float totalSpacing = 0;
+                    for (int i = 1; i < currentParagraphLines.Count; i++)
+                        totalSpacing += Math.Abs(currentParagraphLines[i-1].Y - currentParagraphLines[i].Y);
+                    avgSpacing = totalSpacing / (currentParagraphLines.Count - 1);
+                }
+                p.SetMultipliedLeading(0f); // Disable proportional leading
+                p.SetFixedLeading(avgSpacing); // Force exact absolute leading
+
+                // Render each line, preserving original line breaks with \n
                 for (int lineIndex = 0; lineIndex < currentParagraphLines.Count; lineIndex++)
                 {
                     var line = currentParagraphLines[lineIndex];
+                    bool isLastLine = (lineIndex == currentParagraphLines.Count - 1);
 
                     for (int colIdx = 0; colIdx < line.Columns.Count; colIdx++)
                     {
                         var frag = line.Columns[colIdx];
                         bool isLastCol = (colIdx == line.Columns.Count - 1);
-                        bool isLastLine = (lineIndex == currentParagraphLines.Count - 1);
-                        
-                        // Append space between columns and between lines
-                        bool appendSpace = !(isLastCol && isLastLine);
+                        bool appendSpace = !isLastCol;
                         RenderFragmentsIntoParagraph(p, frag, line.Y, appendSpace);
                     }
-                }
 
-                // ----- Alignment & margins -----
-                bool allLeftsMatch = true;
-                bool allRightsMatch = true;
-
-                float firstLeft = currentParagraphLines.First().Columns.First().X;
-                float firstRight = currentParagraphLines.First().Columns.Last().EndX;
-
-                for (int i = 0; i < currentParagraphLines.Count; i++)
-                {
-                    var l = currentParagraphLines[i];
-                    float left = l.Columns.First().X;
-                    float right = l.Columns.Last().EndX;
-
-                    if (Math.Abs(left - firstLeft) > 15f) allLeftsMatch = false;
-
-                    if (i < currentParagraphLines.Count - 1 || currentParagraphLines.Count == 1)
+                    if (!isLastLine)
                     {
-                        if (Math.Abs(right - firstRight) > 20f) allRightsMatch = false;
+                        p.Add(new iText.Layout.Element.Text("\n"));
                     }
                 }
 
+                // ----- Alignment & Margins -----
                 float minLeft = currentParagraphLines.Min(l => l.Columns.First().X);
                 float maxRight = currentParagraphLines.Max(l => l.Columns.Last().EndX);
-                float firstLineIndent = firstLeft - minLeft;
-
-                // Preserve the original left margin exactly
-                p.SetMarginLeft(minLeft);
+                float firstLineIndent = currentParagraphLines.First().Columns.First().X - minLeft;
 
                 if (firstLineIndent > 5f)
                     p.SetFirstLineIndent(firstLineIndent);
 
+                bool allLeftsMatch = true;
+                bool allRightsMatch = true;
+                for (int i = 0; i < currentParagraphLines.Count; i++)
+                {
+                    var l = currentParagraphLines[i];
+                    if (Math.Abs(l.Columns.First().X - currentParagraphLines.First().Columns.First().X) > 15f) allLeftsMatch = false;
+                    if (Math.Abs(l.Columns.Last().EndX - currentParagraphLines.First().Columns.Last().EndX) > 20f) allRightsMatch = false;
+                }
+                
                 bool isJustified = (currentParagraphLines.Count >= 2 && allLeftsMatch && allRightsMatch);
-
-                // CENTER only for single-line, short, centered-on-page text (titles)
                 bool isCentered = false;
                 if (currentParagraphLines.Count == 1 && isShort)
                 {
-                    float leftMargin = minLeft;
-                    float rightMargin = pageWidth - maxRight;
                     float centerOfText = (minLeft + maxRight) / 2f;
-                    float centerOfPage = pageWidth / 2f;
-                    if (leftMargin > 80f && rightMargin > 80f && Math.Abs(centerOfText - centerOfPage) < 30f)
+                    if (minLeft > 80f && (pageWidth - maxRight) > 80f && Math.Abs(centerOfText - (pageWidth / 2f)) < 30f)
                         isCentered = true;
                 }
 
-                // Relax the right margin bounds. Our standard replacement fonts (Helvetica/Times)
-                // often render slightly wider than the original embedded subset fonts.
-                // If we lock the margin exactly to where the original text ended, the slightly wider 
-                // words hit the wall and fracture onto new lines.
-                float computedRightMargin = pageWidth - maxRight;
+                if (isJustified) p.SetTextAlignment(iText.Layout.Properties.TextAlignment.JUSTIFIED);
+                else if (isCentered) p.SetTextAlignment(iText.Layout.Properties.TextAlignment.CENTER);
 
-                if (isJustified)
-                {
-                    // Give justified text a small 10pt slack so words don't overflow the strict boundary
-                    float justifiedMargin = computedRightMargin - 10f;
-                    p.SetMarginRight(justifiedMargin > 0 ? justifiedMargin : 0);
-                    p.SetTextAlignment(iText.Layout.Properties.TextAlignment.JUSTIFIED);
-                }
-                else if (isCentered)
-                {
-                    p.SetMarginRight(computedRightMargin > 0 ? computedRightMargin : 0);
-                    p.SetTextAlignment(iText.Layout.Properties.TextAlignment.CENTER);
-                }
-                else
-                {
-                    // Left aligned: let the text flow naturally. A strict right margin is unnecessary 
-                    // and causes catastrophic wrapping.
-                    p.SetMarginRight(15f);
-                }
+                // ----- Absolute Positioning for 1:1 Pagination -----
+                // Give the text block maximum width to prevent premature wrapping of slightly wider standard fonts
+                float blockWidth = pageWidth - minLeft; 
+                if (isJustified) blockWidth = maxRight - minLeft; // Justified needs exact width bounds
 
-                if (isMarginalia)
-                {
-                    // For the event handler, we set the position relative to the current page.
-                    // The event handler will draw this absolute positioned paragraph on whatever page is generated.
-                    float blockWidth = pageWidth - minLeft - computedRightMargin;
-                    if (blockWidth < 50f) blockWidth = 50f;
-                    float bottomY = currentParagraphLines.Last().Y - (firstLineFontSize * 0.2f);
-                    
-                    // We don't specify the page number here because the Canvas in the event handler applies it
-                    p.SetFixedPosition(minLeft, bottomY, blockWidth);
-
-                    if (isPageHeader)
-                        headerFooterHandler.Headers[pageNum] = p;
-                    else
-                        headerFooterHandler.Footers[pageNum] = p;
-
-                    currentParagraphLines.Clear();
-                    currentParaIsHeader = false;
-                    return;
-                }
+                float bottomY = currentParagraphLines.Last().Y - (firstLineFontSize * 0.2f);
+                p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth);
 
                 layoutDoc.Add(p);
                 previousParaBottomY = currentParagraphLines.Last().Y;
@@ -854,6 +782,11 @@ public class HeuristicPdfEngine
                 }
 
                 table.GetAccessibilityProperties().SetRole("Table");
+                
+                float tableBottomY = mergedRows.Last().Y - (baseFontSize * 0.2f);
+                float tableBlockWidth = pageWidth - tableMinX;
+                table.SetFixedPosition(pageNum, tableMinX, tableBottomY, tableBlockWidth);
+
                 layoutDoc.Add(table);
                 previousParaBottomY = tableRowsBuffer.Last().Y;
                 tableRowsBuffer.Clear();
@@ -894,19 +827,11 @@ public class HeuristicPdfEngine
                         pImg.SetMargin(0f);
                         pImg.SetMarginLeft(elem.X);
 
-                        if (previousParaBottomY.HasValue)
-                        {
-                            float yGap = previousParaBottomY.Value - elem.Y;
-                            if (yGap > 0)
-                            {
-                                float maxAllowedGap = 50f;
-                                if (yGap > maxAllowedGap) yGap = maxAllowedGap;
-                            }
-                            if (Math.Abs(yGap) > 2f) pImg.SetMarginTop(yGap);
-                        }
+                        float imgBottomY = elem.Y - (elem.ImageHeight > 0 ? elem.ImageHeight : 0f);
+                        pImg.SetFixedPosition(pageNum, elem.X, imgBottomY, pageWidth - elem.X);
 
                         layoutDoc.Add(pImg);
-                        previousParaBottomY = elem.Y - (elem.ImageHeight > 0 ? elem.ImageHeight : 100f);
+                        previousParaBottomY = imgBottomY;
                     }
                     catch { }
                 }
