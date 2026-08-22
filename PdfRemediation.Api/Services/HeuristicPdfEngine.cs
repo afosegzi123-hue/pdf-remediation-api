@@ -99,9 +99,15 @@ public class MergedFragment
 {
     public float X { get; set; }
     public float EndX { get; set; }
-    public string Text { get; set; } = "";
-    public float FontSize { get; set; }
-    public bool IsBold { get; set; }
+    
+    // Retain internal fragments to perfectly preserve individual word styling (bold, superscripts, font sizes)
+    public List<PdfElement> Elements { get; set; } = new List<PdfElement>();
+    
+    public string Text => string.Join("", Elements.Select((e, i) => 
+        (i > 0 && e.X - Elements[i-1].EndX > 2f ? " " : "") + e.Text)).Trim();
+        
+    public float FontSize => Elements.Any() ? Elements.Max(e => e.FontSize) : 0;
+    public bool IsBold => Elements.Any() && Elements.All(e => e.IsBold);
 }
 
 public class AssembledLine
@@ -154,16 +160,22 @@ public class HeuristicPdfEngine
             {
                 for (int c = 0; c < current.Columns.Count; c++)
                 {
-                    string extra = rows[i].Columns[c].Text.Trim();
-                    if (!string.IsNullOrEmpty(extra))
-                        current.Columns[c].Text += " " + extra;
-                        
-                    // Important: if we absorb a row (e.g. superscript absorbed by normal text), keep the larger font size
-                    if (rows[i].Columns[c].FontSize > current.Columns[c].FontSize)
-                        current.Columns[c].FontSize = rows[i].Columns[c].FontSize;
-                        
-                    if (rows[i].Columns[c].IsBold)
-                        current.Columns[c].IsBold = true;
+                    if (rows[i].Columns[c].Elements.Any())
+                    {
+                        // Add spacer element to represent line break in the merged cell
+                        if (current.Columns[c].Elements.Any())
+                        {
+                            current.Columns[c].Elements.Add(new PdfElement 
+                            { 
+                                Text = " ", 
+                                X = 0, EndX = 0, 
+                                FontSize = current.Columns[c].FontSize, 
+                                Y = current.Y 
+                            });
+                        }
+                        // Concatenate internal styled fragments flawlessly
+                        current.Columns[c].Elements.AddRange(rows[i].Columns[c].Elements);
+                    }
                 }
                 current.Y = rows[i].Y; // Adopt the lower Y to keep correct text flow
             }
@@ -184,8 +196,8 @@ public class HeuristicPdfEngine
             Y = src.Y,
             Columns = src.Columns.Select(c => new MergedFragment
             {
-                X = c.X, EndX = c.EndX, Text = c.Text,
-                FontSize = c.FontSize, IsBold = c.IsBold
+                X = c.X, EndX = c.EndX, 
+                Elements = c.Elements.ToList()
             }).ToList()
         };
     }
@@ -242,8 +254,6 @@ public class HeuristicPdfEngine
                 baseFontSize = (float)(double)fsGrp.Key;
             }
 
-            // Instead of rigid mathematical buckets, naturally group fragments that are on the same Y-line.
-            // This safely catches superscripts and subscripts within 6 points of the baseline.
             var sortedFragments = textFragments.OrderByDescending(e => e.Y).ToList();
             var lineGroupsList = new List<List<PdfElement>>();
             if (sortedFragments.Any())
@@ -275,14 +285,8 @@ public class HeuristicPdfEngine
                 var fragments = group.OrderBy(e => e.X).ToList();
                 var line = new AssembledLine { Y = fragments[0].Y };
 
-                var cur = new MergedFragment
-                {
-                    X = fragments[0].X,
-                    EndX = fragments[0].EndX,
-                    Text = fragments[0].Text,
-                    FontSize = fragments[0].FontSize,
-                    IsBold = fragments[0].IsBold
-                };
+                var cur = new MergedFragment { X = fragments[0].X, EndX = fragments[0].EndX };
+                cur.Elements.Add(fragments[0]);
 
                 for (int i = 1; i < fragments.Count; i++)
                 {
@@ -291,20 +295,14 @@ public class HeuristicPdfEngine
                     
                     if (gap < 25f)
                     {
-                        cur.Text += (gap > 2f ? " " : "") + next.Text;
+                        cur.Elements.Add(next);
                         cur.EndX = next.EndX;
-                        // Superscripts have smaller fonts, preserve the larger font of the normal text
-                        if (next.FontSize > cur.FontSize) cur.FontSize = next.FontSize;
-                        if (next.IsBold) cur.IsBold = true;
                     }
                     else
                     {
                         line.Columns.Add(cur);
-                        cur = new MergedFragment
-                        {
-                            X = next.X, EndX = next.EndX, Text = next.Text,
-                            FontSize = next.FontSize, IsBold = next.IsBold
-                        };
+                        cur = new MergedFragment { X = next.X, EndX = next.EndX };
+                        cur.Elements.Add(next);
                     }
                 }
                 line.Columns.Add(cur);
@@ -379,10 +377,24 @@ public class HeuristicPdfEngine
                 {
                     foreach (var frag in line.Columns)
                     {
-                        var txt = new iText.Layout.Element.Text(frag.Text + " ");
-                        if (frag.IsBold) txt.SetBold();
-                        txt.SetFontSize(frag.FontSize);
-                        p.Add(txt);
+                        for (int i = 0; i < frag.Elements.Count; i++)
+                        {
+                            var e = frag.Elements[i];
+                            string textToPrint = e.Text;
+                            if (i > 0 && e.X - frag.Elements[i-1].EndX > 2f)
+                                textToPrint = " " + textToPrint;
+                                
+                            var txt = new iText.Layout.Element.Text(textToPrint);
+                            if (e.IsBold) txt.SetBold();
+                            txt.SetFontSize(e.FontSize);
+                            
+                            // Emulate superscripts and subscripts by physically raising/lowering the tiny text
+                            if (e.Y > line.Y + 2f) txt.SetTextRise(e.Y - line.Y);
+                            else if (e.Y < line.Y - 2f) txt.SetTextRise(e.Y - line.Y);
+                            
+                            p.Add(txt);
+                        }
+                        p.Add(new iText.Layout.Element.Text(" "));
                     }
                 }
 
@@ -443,7 +455,6 @@ public class HeuristicPdfEngine
                 bool isRealTable = false;
                 int maxColsFound = tableRowsBuffer.Max(r => r.Columns.Count);
                 
-                // Strictly require multiple valid multi-column rows to prevent text paragraphs with a single wide gap from being labeled a table
                 var multiColRows = tableRowsBuffer.Where(r => r.Columns.Count >= 2).ToList();
 
                 if (multiColRows.Count >= 3)
@@ -526,10 +537,24 @@ public class HeuristicPdfEngine
                         if (isHeaderRow)
                             cell.GetAccessibilityProperties().SetRole("TH");
 
-                        var txt = new iText.Layout.Element.Text(col.Text);
-                        if (col.IsBold) txt.SetBold();
-                        txt.SetFontSize(col.FontSize);
-                        cell.Add(new iText.Layout.Element.Paragraph(txt).SetMargin(0f));
+                        var pCell = new iText.Layout.Element.Paragraph().SetMargin(0f);
+                        for (int i = 0; i < col.Elements.Count; i++)
+                        {
+                            var e = col.Elements[i];
+                            string textToPrint = e.Text;
+                            if (i > 0 && e.X - col.Elements[i-1].EndX > 2f)
+                                textToPrint = " " + textToPrint;
+                                
+                            var txt = new iText.Layout.Element.Text(textToPrint);
+                            if (e.IsBold) txt.SetBold();
+                            txt.SetFontSize(e.FontSize);
+                            
+                            if (e.Y > row.Y + 2f) txt.SetTextRise(e.Y - row.Y);
+                            else if (e.Y < row.Y - 2f) txt.SetTextRise(e.Y - row.Y);
+                            
+                            pCell.Add(txt);
+                        }
+                        cell.Add(pCell);
                         table.AddCell(cell);
                     }
                     
