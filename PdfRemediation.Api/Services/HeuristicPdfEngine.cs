@@ -3,6 +3,8 @@ using iText.Kernel.Pdf.Canvas.Parser;
 using iText.Kernel.Pdf.Canvas.Parser.Data;
 using iText.Kernel.Pdf.Canvas.Parser.Listener;
 using iText.Kernel.Geom;
+using iText.Kernel.Events;
+using iText.Kernel.Pdf.Canvas;
 using System;
 using System.IO;
 using System.Collections.Generic;
@@ -172,6 +174,35 @@ public class HeuristicPdfEngine
         public bool AutoTagStructure { get; set; } = false;
     }
 
+    private class HeaderFooterEventHandler : IEventHandler
+    {
+        public Dictionary<int, iText.Layout.Element.Paragraph> Headers { get; } = new Dictionary<int, iText.Layout.Element.Paragraph>();
+        public Dictionary<int, iText.Layout.Element.Paragraph> Footers { get; } = new Dictionary<int, iText.Layout.Element.Paragraph>();
+
+        public void HandleEvent(Event currentEvent)
+        {
+            var docEvent = (PdfDocumentEvent)currentEvent;
+            var pdfDoc = docEvent.GetDocument();
+            var page = docEvent.GetPage();
+            int pageNum = pdfDoc.GetPageNumber(page);
+
+            var canvas = new PdfCanvas(page.NewContentStreamBefore(), page.GetResources(), pdfDoc);
+            var layoutCanvas = new iText.Layout.Canvas(canvas, page.GetPageSize());
+
+            // Try to find the header for this page, or fallback to the last known header
+            var header = Headers.ContainsKey(pageNum) ? Headers[pageNum] : Headers.Values.LastOrDefault();
+            if (header != null)
+                layoutCanvas.Add(header);
+
+            // Try to find the footer for this page, or fallback to the last known footer
+            var footer = Footers.ContainsKey(pageNum) ? Footers[pageNum] : Footers.Values.LastOrDefault();
+            if (footer != null)
+                layoutCanvas.Add(footer);
+
+            layoutCanvas.Close();
+        }
+    }
+
     private static bool IsHeaderLine(AssembledLine line, float baseFontSize)
     {
         if (line.MaxFontSize >= baseFontSize + 2f) return true;
@@ -322,8 +353,13 @@ public class HeuristicPdfEngine
         }
 
         pdfDoc.SetTagged();
+        
+        var headerFooterHandler = new HeaderFooterEventHandler();
+        pdfDoc.AddEventHandler(PdfDocumentEvent.END_PAGE, headerFooterHandler);
+
         var layoutDoc = new iText.Layout.Document(pdfDoc);
-        layoutDoc.SetMargins(0, 0, 0, 0);
+        // Reserve 75pt at top and bottom for the absolute headers and footers so body text doesn't overlap them
+        layoutDoc.SetMargins(75f, 0, 75f, 0);
 
         // Font cache shared across all pages
         var fontCache = new Dictionary<string, iText.Kernel.Font.PdfFont>();
@@ -667,13 +703,23 @@ public class HeuristicPdfEngine
 
                 if (isMarginalia)
                 {
-                    // Pin headers and footers to their exact absolute positions so they aren't 
-                    // pushed to the next page if the body text reflows and gets longer.
+                    // For the event handler, we set the position relative to the current page.
+                    // The event handler will draw this absolute positioned paragraph on whatever page is generated.
                     float blockWidth = pageWidth - minLeft - computedRightMargin;
                     if (blockWidth < 50f) blockWidth = 50f;
-                    // Bottom coordinate is roughly baseline minus descender
                     float bottomY = currentParagraphLines.Last().Y - (firstLineFontSize * 0.2f);
-                    p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth);
+                    
+                    // We don't specify the page number here because the Canvas in the event handler applies it
+                    p.SetFixedPosition(minLeft, bottomY, blockWidth);
+
+                    if (isPageHeader)
+                        headerFooterHandler.Headers[pageNum] = p;
+                    else
+                        headerFooterHandler.Footers[pageNum] = p;
+
+                    currentParagraphLines.Clear();
+                    currentParaIsHeader = false;
+                    return;
                 }
 
                 layoutDoc.Add(p);
