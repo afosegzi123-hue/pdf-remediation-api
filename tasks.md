@@ -1,7 +1,7 @@
 # Implementation Tasks Roadmap
 
-- [x] **Task 1:** Initialize .NET 8 Web API project structure (`PdfRemediation.Api`) with necessary NuGet package references (`Npgsql.EntityFrameworkCore.PostgreSQL`, `Microsoft.EntityFrameworkCore.Design`). Verify initial project compilation.
-- [x] **Task 2:** Create Entity Framework Core data context (`AppDbContext`), mapping models for `BatchSession` and `RemediationLog`. Configure connection string resolution via environment variables.
-- [x] **Task 3:** Implement core batch workflow service handling multipart ZIP extraction, stream processing loops, metadata/color/OCR/tagging hooks, and error isolation.
-- [x] **Task 4:** Build the API controller mapping `POST /api/remediation/batch` to ingest archives, invoke processing, log results, and return stream archives.
-- [x] **Task 5:** Author the production multi-stage `Dockerfile` and Render configuration blueprint (`render.yaml`). Run container build checks.
+- [x] **Phase 1 (Backend Setup):** Initialize .NET 8 Web API project structure (`PdfRemediation.Api`) with EF Core, JWT, and Supabase integration. Configure `render.yaml` for deployment.
+- [x] **Phase 2 (Strict 1:1 Layout Engine):** Implement the `HeuristicPdfEngine.cs` using iText7. Replace automatic flow with absolute `SetFixedPosition` pagination to guarantee visual fidelity.
+- [x] **Phase 3 (Alignment & Bounds):** Build algorithms for true paragraph alignment detection (Left, Right, Centered, Justified).
+- [x] **Phase 4 (Table Fixes & Custom Roles):** Fix table overlaps with exact cell height bounds and 10% dynamic font scaling. Map custom `Header`/`Footer` string tags to `StandardRoles.NONSTRUCT`.
+- [ ] **Phase 5 (Next.js Admin Portal):** Construct the Next.js `/akin` dashboard connected to Supabase for file management and log tracking.

@@ -1,4 +1,4 @@
-# Database Schema Specification (PostgreSQL)
+# Database Schema Specification (PostgreSQL - Entity Framework Core)
 
 ## Table: `BatchSessions`
 * `Id` (UUID, Primary Key, Default: `gen_random_uuid()`)

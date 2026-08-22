@@ -1,19 +1,21 @@
 # System Architecture
 [Client Browser]
-│
-▼ (HTTPS POST multipart/form-data)
-[Hugging Face Space: Python Docker Monolith]
-├──► (Port 7860) [FastAPI Web Server]
-│    ├──► Serves Next.js Static Files (Frontend UI & Admin Portal)
-│    └──► Handles `/api/remediation` endpoints
-├──► [Deep Learning Layout Engine (PyTorch / LayoutParser)]
-└──► [Supabase API]
-     ├──► [PostgreSQL Managed Database (Session & Log tracking)]
-     └──► [S3-Compatible Storage Buckets (File persistence)]
+  |
+  | (HTTPS POST multipart/form-data)
+  |
+[Render: .NET 8 Web API Docker Container]
+  |  Handles `/api/remediation` endpoints
+  |  [C# iText7 Heuristic 1:1 Engine]
+  |
+  +-- [Vercel: Next.js Frontend] (UI & Admin Portal hosted independently)
+  |
+  +-- [Supabase API]
+       |-- [PostgreSQL Managed Database (Session & Log tracking)]
+       |-- [S3-Compatible Storage Buckets (File persistence)]
 
 ## Component Technical Specs
-* **Frontend:** Next.js (React) static export.
-* **API Framework:** FastAPI (`uvicorn` ASGI server).
-* **AI & PDF Manipulation:** `PyMuPDF` (fitz), `layoutparser`, `torch`.
-* **Database Driver:** `supabase-py` (or `sqlalchemy` + `psycopg2`).
-* **Container Environment:** Python 3.10 slim base runtime (Ubuntu).
+* **Frontend:** Next.js (React) deployed on Vercel.
+* **API Framework:** ASP.NET Core 8 Web API (`PdfRemediation.Api`).
+* **PDF Engine:** `iText7` (C#) custom heuristic parser.
+* **Database Driver:** `Supabase-CSharp` / `Npgsql.EntityFrameworkCore.PostgreSQL`.
+* **Container Environment:** .NET 8 Alpine/Linux base image (Render).
