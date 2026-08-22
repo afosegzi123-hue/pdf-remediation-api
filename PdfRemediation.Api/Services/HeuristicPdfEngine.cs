@@ -630,24 +630,29 @@ public class HeuristicPdfEngine
                         isCentered = true;
                 }
 
-                // Preserve the original right margin exactly
+                // Relax the right margin bounds. Our standard replacement fonts (Helvetica/Times)
+                // often render slightly wider than the original embedded subset fonts.
+                // If we lock the margin exactly to where the original text ended, the slightly wider 
+                // words hit the wall and fracture onto new lines.
                 float computedRightMargin = pageWidth - maxRight;
-                if (computedRightMargin < 0) computedRightMargin = 0;
 
                 if (isJustified)
                 {
-                    p.SetMarginRight(computedRightMargin);
+                    // Give justified text a small 10pt slack so words don't overflow the strict boundary
+                    float justifiedMargin = computedRightMargin - 10f;
+                    p.SetMarginRight(justifiedMargin > 0 ? justifiedMargin : 0);
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.JUSTIFIED);
                 }
                 else if (isCentered)
                 {
-                    p.SetMarginRight(computedRightMargin);
+                    p.SetMarginRight(computedRightMargin > 0 ? computedRightMargin : 0);
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.CENTER);
                 }
                 else
                 {
-                    // Left aligned: preserve original right margin to control line width
-                    p.SetMarginRight(computedRightMargin);
+                    // Left aligned: let the text flow naturally. A strict right margin is unnecessary 
+                    // and causes catastrophic wrapping.
+                    p.SetMarginRight(15f);
                 }
 
                 layoutDoc.Add(p);
@@ -761,7 +766,9 @@ public class HeuristicPdfEngine
                     {
                         int colspan = (row.Columns.Count == 1 && maxCols > 1) ? maxCols : 1;
                         var cell = new iText.Layout.Element.Cell(1, colspan);
-                        cell.SetPadding(2f);
+                        
+                        // Use 0 padding to maximize width for standard fonts and avoid premature wrapping
+                        cell.SetPadding(0f);
 
                         if (isHeaderRow)
                             cell.GetAccessibilityProperties().SetRole("TH");
