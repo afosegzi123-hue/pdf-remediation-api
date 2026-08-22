@@ -642,9 +642,9 @@ public class HeuristicPdfEngine
                 float medianLeft = allLefts[allLefts.Count / 2];
                 float medianRight = allRights[allRights.Count / 2];
                 
-                // Allow minLeft/maxRight to just be the robust medians for bounding box purposes
-                float minLeft = medianLeft;
-                float maxRight = medianRight;
+                // For bounding box purposes, we MUST use absolute extremes to prevent premature text wrapping
+                float minLeft = allLefts.First();
+                float maxRight = allRights.Last();
 
                 float firstLineIndent = currentParagraphLines.First().Columns.First().X - medianLeft;
                 if (firstLineIndent > 5f)
