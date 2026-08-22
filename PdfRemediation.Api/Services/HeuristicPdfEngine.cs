@@ -313,7 +313,6 @@ public class HeuristicPdfEngine
                     float standardLineHeight = firstLineFontSize * 1.2f;
                     float extraSpace = yGap - standardLineHeight;
                     
-                    // Cap extra space to prevent pushing elements artificially across pages
                     if (extraSpace > 0) 
                     {
                         float maxAllowedSpace = firstLineFontSize * 2f;
@@ -492,7 +491,8 @@ public class HeuristicPdfEngine
 
                     foreach (var col in row.Columns)
                     {
-                        var cell = new iText.Layout.Element.Cell();
+                        int colspan = (row.Columns.Count == 1 && maxCols > 1) ? maxCols : 1;
+                        var cell = new iText.Layout.Element.Cell(1, colspan);
 
                         if (isHeaderRow)
                             cell.GetAccessibilityProperties().SetRole("TH");
@@ -503,8 +503,12 @@ public class HeuristicPdfEngine
                         cell.Add(new iText.Layout.Element.Paragraph(txt).SetMargin(0f));
                         table.AddCell(cell);
                     }
-                    for (int pad = row.Columns.Count; pad < maxCols; pad++)
-                        table.AddCell(new iText.Layout.Element.Cell());
+                    
+                    if (row.Columns.Count > 1)
+                    {
+                        for (int pad = row.Columns.Count; pad < maxCols; pad++)
+                            table.AddCell(new iText.Layout.Element.Cell());
+                    }
                 }
 
                 table.GetAccessibilityProperties().SetRole("Table");
@@ -575,6 +579,18 @@ public class HeuristicPdfEngine
                         FlushParagraph();
                         tableRowsBuffer.Add(line);
                         continue;
+                    }
+                    
+                    // If a 1-column row is extremely close to the ongoing table buffer,
+                    // it is likely a spanning cell (e.g. table title or merged header)
+                    if (tableRowsBuffer.Any())
+                    {
+                        float yGap = Math.Abs(tableRowsBuffer.Last().Y - line.Y);
+                        if (yGap < 20f)
+                        {
+                            tableRowsBuffer.Add(line);
+                            continue;
+                        }
                     }
 
                     RenderBufferedTable();
