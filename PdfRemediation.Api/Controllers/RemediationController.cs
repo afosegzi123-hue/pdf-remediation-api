@@ -40,7 +40,7 @@ public class RemediationController : ControllerBase
 
         return Ok(new {
             FoundKeys = keys.Where(k => k.Contains("SUPA") || k.Contains("DB_")).ToList(),
-            UrlValueLength = configStr?.Length ?? -1,
+            RawSupabaseUrl = configStr ?? "null",
             DbStringStart = parsedHost
         });
     }
