@@ -23,6 +23,8 @@ RUN wget https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-p
 
 ENV DOTNET_gcServer=0
 ENV DOTNET_EnableDiagnostics=0
+ENV ASPNETCORE_URLS="http://0.0.0.0:8080"
+EXPOSE 8080
 
 COPY --from=build /app/publish .
 ENTRYPOINT ["dotnet", "PdfRemediation.Api.dll"]
