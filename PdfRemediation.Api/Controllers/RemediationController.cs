@@ -50,13 +50,20 @@ public class RemediationController : ControllerBase
     {
         var diagnostics = new Dictionary<string, string>();
         
-        // 1. Test Database
         try {
             var db = _serviceProvider.GetService<AppDbContext>();
-            if (db == null) diagnostics.Add("Database", "AppDbContext is null (Connection string missing?)");
+            if (db == null) diagnostics.Add("Database", "AppDbContext is null");
             else {
                 var canConnect = await db.Database.CanConnectAsync();
-                diagnostics.Add("Database", canConnect ? "Connected Successfully!" : "CanConnectAsync returned false. Invalid connection string or firewall blocking.");
+                diagnostics.Add("Database_Connect", canConnect.ToString());
+                
+                try {
+                    db.Database.EnsureCreated();
+                    var count = db.BatchSessions.Count();
+                    diagnostics.Add("Database_Tables", $"Tables exist! Found {count} BatchSessions.");
+                } catch (Exception innerEx) {
+                    diagnostics.Add("Database_EnsureCreated_Error", innerEx.Message);
+                }
             }
         } catch (Exception ex) {
             diagnostics.Add("Database_Error", ex.Message);
