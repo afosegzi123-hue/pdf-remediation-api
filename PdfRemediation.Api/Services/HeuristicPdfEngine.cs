@@ -691,28 +691,32 @@ public class HeuristicPdfEngine
 
                 // ----- Apply True Alignment and Dynamic Bounding Boxes -----
                 float bottomY = currentParagraphLines.Last().Y - (firstLineFontSize * 0.2f);
-                float blockWidth = maxRight - minLeft + 3f; // Exact width with tiny slack
+                float exactWidth = maxRight - minLeft;
 
                 if (isJustified) 
                 {
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.JUSTIFIED);
-                    p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth);
+                    p.SetFixedPosition(pageNum, minLeft, bottomY, exactWidth + 10f); // Generous slack to avoid wrapping
                 }
                 else if (isCentered) 
                 {
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.CENTER);
-                    p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth);
+                    p.SetFixedPosition(pageNum, 0, bottomY, pageWidth); // Use full page width so it never wraps
                 }
                 else if (isRightAligned)
                 {
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.RIGHT);
-                    p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth);
+                    p.SetFixedPosition(pageNum, 0, bottomY, maxRight); // Box from 0 to maxRight so it never wraps
                 }
                 else 
                 {
                     // Default to Left Aligned
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.LEFT);
-                    p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth + 5f); // Slightly more slack to prevent wrapping
+                    if (currentParagraphLines.Count == 1) {
+                        p.SetFixedPosition(pageNum, minLeft, bottomY, pageWidth - minLeft); // Full remaining width to prevent wrapping single lines (like headers)
+                    } else {
+                        p.SetFixedPosition(pageNum, minLeft, bottomY, exactWidth + 10f); // Generous slack for multi-line text
+                    }
                 }
 
                 layoutDoc.Add(p);
