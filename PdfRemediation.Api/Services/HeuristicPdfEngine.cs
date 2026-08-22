@@ -36,13 +36,13 @@ public class StructuralEventListener : IEventListener
             var text = textInfo.GetText();
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            var ascent = textInfo.GetAscentLine().GetStartPoint();
-            var descent = textInfo.GetDescentLine().GetStartPoint();
-            float approxSize = ascent.Get(1) - descent.Get(1);
-            if (approxSize > 0) 
-                approxSize = approxSize * 0.8333f; 
-            else 
-                approxSize = textInfo.GetFontSize();
+            // Extract the true visual font size natively from the current text matrix
+            var ctm = textInfo.GetTextMatrix();
+            float scaleY = Math.Abs(ctm.Get(Matrix.I22));
+            float approxSize = textInfo.GetFontSize() * scaleY;
+            
+            if (approxSize <= 0) 
+                approxSize = 10f; // fallback
 
             var font = textInfo.GetFont();
             var fontProgram = font?.GetFontProgram();
@@ -394,7 +394,10 @@ public class HeuristicPdfEngine
                             if (sameFont && sameBold && sameY)
                             {
                                 if (e.X - frag.Elements[i-1].EndX > 2f)
-                                    currentTextObj.Append(" ");
+                                {
+                                    if (!currentTextObj.ToString().EndsWith(" ") && !e.Text.StartsWith(" "))
+                                        currentTextObj.Append(" ");
+                                }
                                 currentTextObj.Append(e.Text);
                             }
                             else
@@ -410,7 +413,10 @@ public class HeuristicPdfEngine
                                 
                                 currentTextObj.Clear();
                                 if (e.X - frag.Elements[i-1].EndX > 2f)
-                                    currentTextObj.Append(" ");
+                                {
+                                    if (!e.Text.StartsWith(" "))
+                                        currentTextObj.Append(" ");
+                                }
                                 currentTextObj.Append(e.Text);
                                 currentElement = e;
                             }
@@ -462,18 +468,31 @@ public class HeuristicPdfEngine
                 float firstLineIndent = firstLeft - minLeft;
 
                 p.SetMarginLeft(minLeft);
-                p.SetMarginRight(pageWidth - maxRight);
 
                 if (firstLineIndent > 5f)
                     p.SetFirstLineIndent(firstLineIndent);
 
-                if (currentParagraphLines.Count >= 2 && allLeftsMatch && allRightsMatch)
+                bool isJustified = (currentParagraphLines.Count >= 2 && allLeftsMatch && allRightsMatch);
+                bool isCentered = (allCentersMatch && Math.Abs(firstCenter - (pageWidth / 2f)) < 40f);
+
+                if (isJustified)
                 {
+                    float rightMargin = pageWidth - maxRight - 15f;
+                    if (rightMargin < 0) rightMargin = 0;
+                    p.SetMarginRight(rightMargin);
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.JUSTIFIED);
                 }
-                else if (allCentersMatch && Math.Abs(firstCenter - (pageWidth / 2f)) < 40f)
+                else if (isCentered)
                 {
+                    float rightMargin = pageWidth - maxRight;
+                    if (rightMargin < 0) rightMargin = 0;
+                    p.SetMarginRight(rightMargin);
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.CENTER);
+                }
+                else
+                {
+                    // Left aligned (default). Give it maximum room to prevent premature wrapping.
+                    p.SetMarginRight(15f); 
                 }
 
                 layoutDoc.Add(p);
@@ -551,8 +570,12 @@ public class HeuristicPdfEngine
                 var table = new iText.Layout.Element.Table(maxCols);
                 
                 table.SetMarginLeft(tableMinX);
-                float tableWidth = tableMaxX - tableMinX;
+                
+                float tableWidth = (tableMaxX - tableMinX) + 50f; // Add slack to prevent cell wrapping
+                if (tableWidth > pageWidth - tableMinX - 10f) 
+                    tableWidth = pageWidth - tableMinX - 10f;
                 if (tableWidth < 100f) tableWidth = 100f;
+                
                 table.SetWidth(iText.Layout.Properties.UnitValue.CreatePointValue(tableWidth));
                 
                 table.SetMarginTop(0f);
@@ -589,7 +612,10 @@ public class HeuristicPdfEngine
                                 if (sameFont && sameBold && sameY)
                                 {
                                     if (e.X - col.Elements[i-1].EndX > 2f)
-                                        currentTextObj.Append(" ");
+                                    {
+                                        if (!currentTextObj.ToString().EndsWith(" ") && !e.Text.StartsWith(" "))
+                                            currentTextObj.Append(" ");
+                                    }
                                     currentTextObj.Append(e.Text);
                                 }
                                 else
@@ -605,7 +631,10 @@ public class HeuristicPdfEngine
                                     
                                     currentTextObj.Clear();
                                     if (e.X - col.Elements[i-1].EndX > 2f)
-                                        currentTextObj.Append(" ");
+                                    {
+                                        if (!e.Text.StartsWith(" "))
+                                            currentTextObj.Append(" ");
+                                    }
                                     currentTextObj.Append(e.Text);
                                     currentElement = e;
                                 }
@@ -722,7 +751,7 @@ public class HeuristicPdfEngine
                     if (string.IsNullOrWhiteSpace(lineText)) continue;
 
                     bool lineIsHeader = IsHeaderLine(line, baseFontSize);
-                    bool lineIsListItem = System.Text.RegularExpressions.Regex.IsMatch(lineText, @"^([•○▪\-\*]|\d+\.|[a-zA-Z]\))(\s|$)");
+                    bool lineIsListItem = System.Text.RegularExpressions.Regex.IsMatch(lineText, @"^([ 	?\-\*]|\d+\.|[a-zA-Z]\))(\s|$)");
 
                     bool shouldFlush = false;
                     if (currentParagraphLines.Any())
