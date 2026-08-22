@@ -369,7 +369,7 @@ public class HeuristicPdfEngine
             // ---------------------------------------------------------------
             // Helper: Create a fully styled iText Text element
             // ---------------------------------------------------------------
-            iText.Layout.Element.Text CreateStyledText(string textContent, PdfElement styleSource, float lineY)
+            iText.Layout.Element.Text CreateStyledText(string textContent, PdfElement styleSource, float lineY, float scaleFactor = 1f)
             {
                 string fontKey = MapToStandardFont(styleSource.OriginalFontName, styleSource.IsBold, styleSource.IsItalic);
                 if (!fontCache.TryGetValue(fontKey, out var pdfFont))
@@ -381,7 +381,7 @@ public class HeuristicPdfEngine
 
                 var txt = new iText.Layout.Element.Text(textContent);
                 txt.SetFont(pdfFont);
-                txt.SetFontSize(styleSource.FontSize);
+                txt.SetFontSize(styleSource.FontSize * scaleFactor);
 
                 // Apply font color
                 txt.SetFontColor(new iText.Kernel.Colors.DeviceRgb(
@@ -482,7 +482,7 @@ public class HeuristicPdfEngine
             // ---------------------------------------------------------------
             // Helper: Render batched styled fragments into a paragraph
             // ---------------------------------------------------------------
-            void RenderFragmentsIntoParagraph(iText.Layout.Element.Paragraph p, MergedFragment frag, float lineY, bool appendSpace)
+            void RenderFragmentsIntoParagraph(iText.Layout.Element.Paragraph p, MergedFragment frag, float lineY, bool appendSpace, float scaleFactor = 1f)
             {
                 if (!frag.Elements.Any()) return;
 
@@ -514,7 +514,7 @@ public class HeuristicPdfEngine
                     else
                     {
                         // Flush accumulated text with current style
-                        p.Add(CreateStyledText(sb.ToString(), currentEl, lineY));
+                        p.Add(CreateStyledText(sb.ToString(), currentEl, lineY, scaleFactor));
 
                         sb.Clear();
                         if (e.X - frag.Elements[i - 1].EndX > 2f && !e.Text.StartsWith(" "))
@@ -529,7 +529,7 @@ public class HeuristicPdfEngine
                 {
                     if (appendSpace && !sb.ToString().EndsWith(" "))
                         sb.Append(" ");
-                    p.Add(CreateStyledText(sb.ToString(), currentEl, lineY));
+                    p.Add(CreateStyledText(sb.ToString(), currentEl, lineY, scaleFactor));
                 }
             }
 
@@ -791,19 +791,32 @@ public class HeuristicPdfEngine
                     bool isHeaderRow = (r == 0 && firstRowIsHeader);
                     var row = mergedRows[r];
 
+                    float rowHeight = baseFontSize * 1.5f;
+                    if (r < mergedRows.Count - 1)
+                        rowHeight = Math.Abs(row.Y - mergedRows[r+1].Y);
+                    else if (mergedRows.Count >= 2)
+                        rowHeight = Math.Abs(mergedRows[r-1].Y - row.Y);
+                    
+                    // Clamp row height to a reasonable minimum
+                    if (rowHeight < baseFontSize) rowHeight = baseFontSize * 1.2f;
+
                     foreach (var col in row.Columns)
                     {
                         int colspan = (row.Columns.Count == 1 && maxCols > 1) ? maxCols : 1;
                         var cell = new iText.Layout.Element.Cell(1, colspan);
                         
-                        // Use 0 padding to maximize width for standard fonts and avoid premature wrapping
+                        // Enforce exact cell height to prevent the table from expanding upwards and overlapping text
+                        cell.SetHeight(rowHeight);
                         cell.SetPadding(0f);
 
                         if (isHeaderRow)
                             cell.GetAccessibilityProperties().SetRole("TH");
 
                         var pCell = new iText.Layout.Element.Paragraph().SetMargin(0f);
-                        RenderFragmentsIntoParagraph(pCell, col, row.Y, false);
+                        pCell.SetMultipliedLeading(0.9f);
+                        
+                        // Slightly reduce font size by 10% to prevent standard fonts from wrapping inside the exact column widths
+                        RenderFragmentsIntoParagraph(pCell, col, row.Y, false, 0.90f);
                         cell.Add(pCell);
                         table.AddCell(cell);
                     }
