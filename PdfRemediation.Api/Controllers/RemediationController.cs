@@ -23,6 +23,34 @@ public class RemediationController : ControllerBase
         _serviceProvider = serviceProvider;
     }
 
+    [HttpGet("diagnostics")]
+    public async Task<IActionResult> RunDiagnostics()
+    {
+        var diagnostics = new Dictionary<string, string>();
+        
+        // 1. Test Database
+        try {
+            var db = _serviceProvider.GetService<AppDbContext>();
+            if (db == null) diagnostics.Add("Database", "AppDbContext is null (Connection string missing?)");
+            else {
+                var canConnect = await db.Database.CanConnectAsync();
+                diagnostics.Add("Database", canConnect ? "Connected Successfully!" : "CanConnectAsync returned false. Invalid connection string or firewall blocking.");
+            }
+        } catch (Exception ex) {
+            diagnostics.Add("Database_Error", ex.Message);
+        }
+
+        // 2. Test Storage Bucket
+        try {
+            var files = await _supabase.ListFilesAsync();
+            diagnostics.Add("Storage", $"Connected Successfully! Found {files.Count} files in bucket.");
+        } catch (Exception ex) {
+            diagnostics.Add("Storage_Error", ex.Message);
+        }
+
+        return Ok(diagnostics);
+    }
+
     [HttpPost("process")]
     [DisableRequestSizeLimit]
     public async Task<IActionResult> ProcessFile([FromForm] IFormFile file, [FromForm] string optionsJson)

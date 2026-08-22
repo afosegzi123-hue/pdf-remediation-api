@@ -46,18 +46,10 @@ public class SupabaseService
 
     public async Task<List<object>> ListFilesAsync()
     {
-        if (_client == null) return new List<object>();
+        if (_client == null) throw new Exception("Supabase client is null. SUPABASE_URL or SUPABASE_SERVICE_KEY environment variables are missing or empty!");
 
-        try
-        {
-            var files = await _client.Storage.From("remediated-pdfs").List();
-            return files?.Cast<object>().ToList() ?? new List<object>();
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Supabase list failed: {ex.Message}");
-            return new List<object>();
-        }
+        var files = await _client.Storage.From("remediated-pdfs").List();
+        return files?.Cast<object>().ToList() ?? new List<object>();
     }
 
     public async Task DeleteFileAsync(string fileName)
