@@ -1,6 +1,8 @@
 using AspNetCoreRateLimit;
 using PdfRemediation.Api.Security;
 using PdfRemediation.Api.Services;
+using PdfRemediation.Api.Data;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -8,6 +10,14 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+// Database
+var dbConnectionString = builder.Configuration["DB_CONNECTION_STRING"];
+if (!string.IsNullOrEmpty(dbConnectionString))
+{
+    builder.Services.AddDbContext<AppDbContext>(options =>
+        options.UseNpgsql(dbConnectionString));
+}
 
 // Supabase
 builder.Services.AddSingleton<SupabaseService>();
@@ -29,6 +39,17 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Ensure DB is created
+using (var scope = app.Services.CreateScope())
+{
+    var dbContext = scope.ServiceProvider.GetService<AppDbContext>();
+    if (dbContext != null)
+    {
+        try { dbContext.Database.EnsureCreated(); }
+        catch (Exception ex) { Console.WriteLine("DB EnsureCreated Failed: " + ex.Message); }
+    }
+}
 
 // Health check for Render
 app.MapGet("/api/health", () => Results.Ok(new { status = "healthy" }));
