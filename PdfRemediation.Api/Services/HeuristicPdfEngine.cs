@@ -879,10 +879,30 @@ public class HeuristicPdfEngine
 
                         float lineSpacing = Math.Abs(lastLineInPara.Y - line.Y);
                         float prevAvgFont = currentParagraphLines.Average(l => l.MaxFontSize);
-                        bool largeYGap = lineSpacing > (prevAvgFont * 2.5f);
+                        
+                        bool largeYGap = false;
+                        if (currentParagraphLines.Count >= 2)
+                        {
+                            float totalSpacing = 0;
+                            for (int i = 1; i < currentParagraphLines.Count; i++)
+                                totalSpacing += Math.Abs(currentParagraphLines[i-1].Y - currentParagraphLines[i].Y);
+                            float avgSpacing = totalSpacing / (currentParagraphLines.Count - 1);
+                            
+                            if (lineSpacing > avgSpacing + (prevAvgFont * 0.5f))
+                                largeYGap = true;
+                        }
+                        else
+                        {
+                            if (lineSpacing > prevAvgFont * 2.5f)
+                                largeYGap = true;
+                        }
 
                         float paraMinX = currentParagraphLines.Min(l => l.Columns.First().X);
                         bool isIndented = (line.Columns.First().X - paraMinX) > 15f;
+
+                        float paraMaxX = Math.Max(currentParagraphLines.Max(l => l.Columns.Last().EndX), line.Columns.Last().EndX);
+                        float prevLineEndX = lastLineInPara.Columns.Last().EndX;
+                        bool prevLineShort = (paraMaxX - prevLineEndX) > 35f;
 
                         bool fontSizeChanged = Math.Abs(line.MaxFontSize - prevAvgFont) > 1.5f;
 
@@ -890,6 +910,7 @@ public class HeuristicPdfEngine
                         if (currentParaIsHeader) shouldFlush = true;
                         if (largeYGap) shouldFlush = true;
                         if (isIndented) shouldFlush = true;
+                        if (prevLineShort) shouldFlush = true;
                         if (fontSizeChanged) shouldFlush = true;
                         if (lineIsListItem) shouldFlush = true;
                     }
