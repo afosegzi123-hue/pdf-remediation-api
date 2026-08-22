@@ -256,24 +256,50 @@ public class HeuristicPdfEngine
 
             var sortedFragments = textFragments.OrderByDescending(e => e.Y).ToList();
             var lineGroupsList = new List<List<PdfElement>>();
-            if (sortedFragments.Any())
-            {
-                var currentGroup = new List<PdfElement> { sortedFragments[0] };
-                lineGroupsList.Add(currentGroup);
-                float currentY = sortedFragments[0].Y;
 
-                for (int i = 1; i < sortedFragments.Count; i++)
+            foreach (var frag in sortedFragments)
+            {
+                bool added = false;
+                foreach (var group in lineGroupsList)
                 {
-                    if (Math.Abs(currentY - sortedFragments[i].Y) < 6f)
+                    float anchorY = group[0].Y;
+                    float yDiff = Math.Abs(anchorY - frag.Y);
+                    
+                    if (yDiff < 4f)
                     {
-                        currentGroup.Add(sortedFragments[i]);
+                        group.Add(frag);
+                        added = true;
+                        break;
                     }
-                    else
+                    
+                    float anchorFontSize = group[0].FontSize;
+                    float maxAllowedYDiff = Math.Max(frag.FontSize, anchorFontSize) * 1.5f;
+                    
+                    if (yDiff < maxAllowedYDiff)
                     {
-                        currentGroup = new List<PdfElement> { sortedFragments[i] };
-                        lineGroupsList.Add(currentGroup);
-                        currentY = sortedFragments[i].Y;
+                        bool xOverlap = false;
+                        foreach (var existing in group)
+                        {
+                            float xIntersect = Math.Min(frag.EndX, existing.EndX) - Math.Max(frag.X, existing.X);
+                            if (xIntersect > 1f) 
+                            {
+                                xOverlap = true;
+                                break;
+                            }
+                        }
+                        
+                        if (!xOverlap)
+                        {
+                            group.Add(frag);
+                            added = true;
+                            break;
+                        }
                     }
+                }
+
+                if (!added)
+                {
+                    lineGroupsList.Add(new List<PdfElement> { frag });
                 }
             }
 
@@ -424,6 +450,13 @@ public class HeuristicPdfEngine
                         
                         if (currentTextObj.Length > 0)
                         {
+                            bool isLastLine = (line == currentParagraphLines.Last());
+                            bool isLastCol = (frag == line.Columns.Last());
+                            bool needSpace = !(isLastLine && isLastCol);
+                            
+                            if (needSpace && !currentTextObj.ToString().EndsWith(" "))
+                                currentTextObj.Append(" ");
+
                             var txt = new iText.Layout.Element.Text(currentTextObj.ToString());
                             if (currentElement.IsBold) txt.SetBold();
                             txt.SetFontSize(currentElement.FontSize);
@@ -433,8 +466,6 @@ public class HeuristicPdfEngine
                             
                             p.Add(txt);
                         }
-                        
-                        p.Add(new iText.Layout.Element.Text(" "));
                     }
                 }
 
