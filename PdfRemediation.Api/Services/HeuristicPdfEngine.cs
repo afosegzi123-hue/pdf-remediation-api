@@ -597,27 +597,22 @@ public class HeuristicPdfEngine
                 p.SetMultipliedLeading(0f); // Disable proportional leading
                 p.SetFixedLeading(avgSpacing); // Force exact absolute leading
 
-                // Render each line, preserving original line breaks with \n
+                // Render each line, allowing natural text flow (no \n) to enable true iText alignment
                 for (int lineIndex = 0; lineIndex < currentParagraphLines.Count; lineIndex++)
                 {
                     var line = currentParagraphLines[lineIndex];
-                    bool isLastLine = (lineIndex == currentParagraphLines.Count - 1);
 
                     for (int colIdx = 0; colIdx < line.Columns.Count; colIdx++)
                     {
                         var frag = line.Columns[colIdx];
                         bool isLastCol = (colIdx == line.Columns.Count - 1);
-                        bool appendSpace = !isLastCol;
+                        bool isLastLine = (lineIndex == currentParagraphLines.Count - 1);
+                        bool appendSpace = !(isLastCol && isLastLine);
                         RenderFragmentsIntoParagraph(p, frag, line.Y, appendSpace);
-                    }
-
-                    if (!isLastLine)
-                    {
-                        p.Add(new iText.Layout.Element.Text("\n"));
                     }
                 }
 
-                // ----- Alignment & Margins -----
+                // ----- Alignment Detection -----
                 float minLeft = currentParagraphLines.Min(l => l.Columns.First().X);
                 float maxRight = currentParagraphLines.Max(l => l.Columns.Last().EndX);
                 float firstLineIndent = currentParagraphLines.First().Columns.First().X - minLeft;
@@ -630,11 +625,20 @@ public class HeuristicPdfEngine
                 for (int i = 0; i < currentParagraphLines.Count; i++)
                 {
                     var l = currentParagraphLines[i];
-                    if (Math.Abs(l.Columns.First().X - currentParagraphLines.First().Columns.First().X) > 15f) allLeftsMatch = false;
-                    if (Math.Abs(l.Columns.Last().EndX - currentParagraphLines.First().Columns.Last().EndX) > 20f) allRightsMatch = false;
+                    if (Math.Abs(l.Columns.First().X - currentParagraphLines.First().Columns.First().X) > 15f) 
+                        allLeftsMatch = false;
+                    
+                    // Exclude the last line from the right-margin check, as it is naturally short
+                    if (i < currentParagraphLines.Count - 1 || currentParagraphLines.Count == 1)
+                    {
+                        if (Math.Abs(l.Columns.Last().EndX - currentParagraphLines.First().Columns.Last().EndX) > 20f) 
+                            allRightsMatch = false;
+                    }
                 }
                 
                 bool isJustified = (currentParagraphLines.Count >= 2 && allLeftsMatch && allRightsMatch);
+                bool isRightAligned = (currentParagraphLines.Count >= 2 && !allLeftsMatch && allRightsMatch);
+                
                 bool isCentered = false;
                 if (currentParagraphLines.Count == 1 && isShort)
                 {
@@ -643,16 +647,32 @@ public class HeuristicPdfEngine
                         isCentered = true;
                 }
 
-                if (isJustified) p.SetTextAlignment(iText.Layout.Properties.TextAlignment.JUSTIFIED);
-                else if (isCentered) p.SetTextAlignment(iText.Layout.Properties.TextAlignment.CENTER);
-
-                // ----- Absolute Positioning for 1:1 Pagination -----
-                // Give the text block maximum width to prevent premature wrapping of slightly wider standard fonts
-                float blockWidth = pageWidth - minLeft; 
-                if (isJustified) blockWidth = maxRight - minLeft; // Justified needs exact width bounds
-
+                // ----- Apply True Alignment and Dynamic Bounding Boxes -----
                 float bottomY = currentParagraphLines.Last().Y - (firstLineFontSize * 0.2f);
-                p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth);
+
+                if (isJustified) 
+                {
+                    p.SetTextAlignment(iText.Layout.Properties.TextAlignment.JUSTIFIED);
+                    float blockWidth = maxRight - minLeft + 2f; // Exact width with tiny slack
+                    p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth);
+                }
+                else if (isCentered) 
+                {
+                    p.SetTextAlignment(iText.Layout.Properties.TextAlignment.CENTER);
+                    p.SetFixedPosition(pageNum, 0, bottomY, pageWidth); // Full page width, centered automatically
+                }
+                else if (isRightAligned)
+                {
+                    p.SetTextAlignment(iText.Layout.Properties.TextAlignment.RIGHT);
+                    p.SetFixedPosition(pageNum, 0, bottomY, maxRight + 2f); // Bounded to the right edge
+                }
+                else 
+                {
+                    // Default to Left Aligned
+                    p.SetTextAlignment(iText.Layout.Properties.TextAlignment.LEFT);
+                    float blockWidth = pageWidth - minLeft; // Maximum width to prevent premature wrapping
+                    p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth);
+                }
 
                 layoutDoc.Add(p);
                 previousParaBottomY = currentParagraphLines.Last().Y;
