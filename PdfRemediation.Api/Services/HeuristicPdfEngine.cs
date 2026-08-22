@@ -583,9 +583,11 @@ public class HeuristicPdfEngine
                     @"^([•○▪\-\*]|\d+\.|[a-zA-Z]\))(\s|$)"
                 );
 
-                // Detect page headers (top 1 inch) and footers (bottom 1 inch)
-                bool isPageHeader = firstLineY > pageHeight - 72f;
-                bool isPageFooter = firstLineY < 72f;
+                // Detect page headers (top 0.5 inch) and footers (bottom 0.5 inch)
+                // We must be careful not to strip structure from a real heading (H1/H2) that happens to be at the top of the page!
+                bool isPotentialHeading = (maxFont >= baseFontSize + 2f) || (allBold && isShort);
+                bool isPageHeader = (firstLineY > pageHeight - 36f) && isShort && !isPotentialHeading;
+                bool isPageFooter = (firstLineY < 36f) && isShort;
                 bool isMarginalia = isPageHeader || isPageFooter;
 
                 if (isPageHeader)
