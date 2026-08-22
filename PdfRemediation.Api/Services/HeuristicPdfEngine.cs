@@ -36,13 +36,12 @@ public class StructuralEventListener : IEventListener
             var text = textInfo.GetText();
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            // Extract the true visual font size natively from the current text matrix
             var ctm = textInfo.GetTextMatrix();
             float scaleY = Math.Abs(ctm.Get(Matrix.I22));
             float approxSize = textInfo.GetFontSize() * scaleY;
             
             if (approxSize <= 0) 
-                approxSize = 10f; // fallback
+                approxSize = 10f;
 
             var font = textInfo.GetFont();
             var fontProgram = font?.GetFontProgram();
@@ -99,8 +98,6 @@ public class MergedFragment
 {
     public float X { get; set; }
     public float EndX { get; set; }
-    
-    // Retain internal fragments to perfectly preserve individual word styling (bold, superscripts, font sizes)
     public List<PdfElement> Elements { get; set; } = new List<PdfElement>();
     
     public string Text => string.Join("", Elements.Select((e, i) => 
@@ -162,7 +159,6 @@ public class HeuristicPdfEngine
                 {
                     if (rows[i].Columns[c].Elements.Any())
                     {
-                        // Add spacer element to represent line break in the merged cell
                         if (current.Columns[c].Elements.Any())
                         {
                             current.Columns[c].Elements.Add(new PdfElement 
@@ -173,11 +169,24 @@ public class HeuristicPdfEngine
                                 Y = current.Y 
                             });
                         }
-                        // Concatenate internal styled fragments flawlessly
-                        current.Columns[c].Elements.AddRange(rows[i].Columns[c].Elements);
+                        
+                        // Normalize the baseline (Y) of the merged row so TextRise evaluates correctly inside the single paragraph
+                        float offset = current.Y - rows[i].Y;
+                        var normalizedElements = rows[i].Columns[c].Elements.Select(e => new PdfElement 
+                        {
+                            Text = e.Text,
+                            X = e.X, EndX = e.EndX,
+                            FontSize = e.FontSize,
+                            IsBold = e.IsBold,
+                            ImageBytes = e.ImageBytes,
+                            ImageHeight = e.ImageHeight,
+                            ImageWidth = e.ImageWidth,
+                            Y = e.Y + offset 
+                        });
+                        
+                        current.Columns[c].Elements.AddRange(normalizedElements);
                     }
                 }
-                current.Y = rows[i].Y; // Adopt the lower Y to keep correct text flow
             }
             else
             {
@@ -504,7 +513,17 @@ public class HeuristicPdfEngine
                     p.SetFirstLineIndent(firstLineIndent);
 
                 bool isJustified = (currentParagraphLines.Count >= 2 && allLeftsMatch && allRightsMatch);
-                bool isCentered = (allCentersMatch && Math.Abs(firstCenter - (pageWidth / 2f)) < 40f);
+                
+                bool isCentered = false;
+                if (allCentersMatch && Math.Abs(firstCenter - (pageWidth / 2f)) < 40f)
+                {
+                    float leftMargin = minLeft;
+                    float rightMargin = pageWidth - maxRight;
+                    if (leftMargin > 50f && rightMargin > 50f)
+                    {
+                        isCentered = true;
+                    }
+                }
 
                 if (isJustified)
                 {
@@ -522,7 +541,6 @@ public class HeuristicPdfEngine
                 }
                 else
                 {
-                    // Left aligned (default). Give it maximum room to prevent premature wrapping.
                     p.SetMarginRight(15f); 
                 }
 
@@ -598,11 +616,28 @@ public class HeuristicPdfEngine
                 float tableMaxX = mergedRows.Max(r => r.Columns.Last().EndX);
                 
                 int maxCols = mergedRows.Max(r => r.Columns.Count);
-                var table = new iText.Layout.Element.Table(maxCols);
+                
+                float[] colWidths = new float[maxCols];
+                for (int c = 0; c < maxCols; c++)
+                {
+                    float maxColWidth = 10f;
+                    foreach (var row in mergedRows)
+                    {
+                        if (row.Columns.Count > c)
+                        {
+                            if (row.Columns.Count == 1 && maxCols > 1) continue; 
+                            float w = row.Columns[c].EndX - row.Columns[c].X;
+                            if (w > maxColWidth) maxColWidth = w;
+                        }
+                    }
+                    colWidths[c] = maxColWidth;
+                }
+                
+                var table = new iText.Layout.Element.Table(iText.Layout.Properties.UnitValue.CreatePercentArray(colWidths));
                 
                 table.SetMarginLeft(tableMinX);
                 
-                float tableWidth = (tableMaxX - tableMinX) + 50f; // Add slack to prevent cell wrapping
+                float tableWidth = (tableMaxX - tableMinX) + 50f; 
                 if (tableWidth > pageWidth - tableMinX - 10f) 
                     tableWidth = pageWidth - tableMinX - 10f;
                 if (tableWidth < 100f) tableWidth = 100f;
@@ -764,8 +799,6 @@ public class HeuristicPdfEngine
                         continue;
                     }
                     
-                    // If a 1-column row is extremely close to the ongoing table buffer,
-                    // it is likely a spanning cell (e.g. table title or merged header)
                     if (tableRowsBuffer.Any())
                     {
                         float yGap = Math.Abs(tableRowsBuffer.Last().Y - line.Y);
@@ -791,10 +824,10 @@ public class HeuristicPdfEngine
                         
                         float lineSpacing = Math.Abs(lastLineInPara.Y - line.Y);
                         float prevAvgFont = currentParagraphLines.Average(l => l.MaxFontSize);
-                        bool largeYGap = lineSpacing > (prevAvgFont * 1.6f);
+                        bool largeYGap = lineSpacing > (prevAvgFont * 2.5f);
 
                         float paraMinX = currentParagraphLines.Min(l => l.Columns.First().X);
-                        bool isIndented = (line.Columns.First().X - paraMinX) > 10f;
+                        bool isIndented = (line.Columns.First().X - paraMinX) > 15f;
                         
                         bool fontSizeChanged = Math.Abs(line.MaxFontSize - prevAvgFont) > 1.5f;
 
