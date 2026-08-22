@@ -266,49 +266,27 @@ public class HeuristicPdfEngine
             var sortedFragments = textFragments.OrderByDescending(e => e.Y).ToList();
             var lineGroupsList = new List<List<PdfElement>>();
 
-            foreach (var frag in sortedFragments)
+            if (sortedFragments.Any())
             {
-                bool added = false;
-                foreach (var group in lineGroupsList)
-                {
-                    float anchorY = group[0].Y;
-                    float yDiff = Math.Abs(anchorY - frag.Y);
-                    
-                    if (yDiff < 4f)
-                    {
-                        group.Add(frag);
-                        added = true;
-                        break;
-                    }
-                    
-                    float anchorFontSize = group[0].FontSize;
-                    float maxAllowedYDiff = Math.Max(frag.FontSize, anchorFontSize) * 1.5f;
-                    
-                    if (yDiff < maxAllowedYDiff)
-                    {
-                        bool xOverlap = false;
-                        foreach (var existing in group)
-                        {
-                            float xIntersect = Math.Min(frag.EndX, existing.EndX) - Math.Max(frag.X, existing.X);
-                            if (xIntersect > 1f) 
-                            {
-                                xOverlap = true;
-                                break;
-                            }
-                        }
-                        
-                        if (!xOverlap)
-                        {
-                            group.Add(frag);
-                            added = true;
-                            break;
-                        }
-                    }
-                }
+                var currentGroup = new List<PdfElement> { sortedFragments[0] };
+                lineGroupsList.Add(currentGroup);
+                float currentY = sortedFragments[0].Y;
 
-                if (!added)
+                for (int i = 1; i < sortedFragments.Count; i++)
                 {
-                    lineGroupsList.Add(new List<PdfElement> { frag });
+                    float yDiff = Math.Abs(currentY - sortedFragments[i].Y);
+                    // Use a fixed threshold: fragments within 6pt of the dominant baseline belong to the same line.
+                    // This safely absorbs superscripts/subscripts without merging separate lines.
+                    if (yDiff < 6f)
+                    {
+                        currentGroup.Add(sortedFragments[i]);
+                    }
+                    else
+                    {
+                        currentGroup = new List<PdfElement> { sortedFragments[i] };
+                        lineGroupsList.Add(currentGroup);
+                        currentY = sortedFragments[i].Y;
+                    }
                 }
             }
 
@@ -318,7 +296,17 @@ public class HeuristicPdfEngine
                 if (!group.Any()) continue;
                 
                 var fragments = group.OrderBy(e => e.X).ToList();
-                var line = new AssembledLine { Y = fragments[0].Y };
+                
+                // Use the dominant (most frequent) Y as the line's baseline anchor.
+                // This prevents a superscript/subscript from hijacking the anchor and
+                // causing all normal text to get a TextRise offset (which causes overlap).
+                float dominantY = group
+                    .GroupBy(e => Math.Round(e.Y * 2f) / 2f) // bucket to 0.5pt
+                    .OrderByDescending(g => g.Count())
+                    .First()
+                    .First().Y;
+                
+                var line = new AssembledLine { Y = dominantY };
 
                 var cur = new MergedFragment { X = fragments[0].X, EndX = fragments[0].EndX };
                 cur.Elements.Add(fragments[0]);
@@ -514,12 +502,16 @@ public class HeuristicPdfEngine
 
                 bool isJustified = (currentParagraphLines.Count >= 2 && allLeftsMatch && allRightsMatch);
                 
+                // Only consider centering for single-line, short text (titles, headings).
+                // Multi-line paragraphs are NEVER centered — they are body text.
                 bool isCentered = false;
-                if (allCentersMatch && Math.Abs(firstCenter - (pageWidth / 2f)) < 40f)
+                if (currentParagraphLines.Count == 1 && isShort)
                 {
                     float leftMargin = minLeft;
                     float rightMargin = pageWidth - maxRight;
-                    if (leftMargin > 50f && rightMargin > 50f)
+                    float centerOfText = (minLeft + maxRight) / 2f;
+                    float centerOfPage = pageWidth / 2f;
+                    if (leftMargin > 80f && rightMargin > 80f && Math.Abs(centerOfText - centerOfPage) < 30f)
                     {
                         isCentered = true;
                     }
