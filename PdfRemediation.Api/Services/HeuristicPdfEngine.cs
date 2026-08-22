@@ -309,10 +309,16 @@ public class HeuristicPdfEngine
                 
                 if (previousParaBottomY.HasValue)
                 {
-                    // Allow negative margins to pull text up alongside images
                     float yGap = previousParaBottomY.Value - firstLineY; 
                     float standardLineHeight = firstLineFontSize * 1.2f;
                     float extraSpace = yGap - standardLineHeight;
+                    
+                    // Cap extra space to prevent pushing elements artificially across pages
+                    if (extraSpace > 0) 
+                    {
+                        float maxAllowedSpace = firstLineFontSize * 2f;
+                        if (extraSpace > maxAllowedSpace) extraSpace = maxAllowedSpace;
+                    }
                     
                     if (Math.Abs(extraSpace) > 2f)
                     {
@@ -407,24 +413,32 @@ public class HeuristicPdfEngine
 
                 bool isRealTable = false;
                 int maxColsFound = tableRowsBuffer.Max(r => r.Columns.Count);
-                if (maxColsFound >= 2 && tableRowsBuffer.Count >= 2)
+                if (tableRowsBuffer.Count >= 2 && maxColsFound >= 2)
                 {
-                    for (int i = 0; i < tableRowsBuffer.Count - 1; i++)
+                    if (tableRowsBuffer.Count >= 3)
                     {
-                        var r1 = tableRowsBuffer[i];
-                        var r2 = tableRowsBuffer[i + 1];
-                        if (r1.Columns.Count >= 2 && r1.Columns.Count == r2.Columns.Count)
+                        isRealTable = true;
+                    }
+                    else if (maxColsFound >= 3)
+                    {
+                        isRealTable = true;
+                    }
+                    else
+                    {
+                        var r1 = tableRowsBuffer[0];
+                        var r2 = tableRowsBuffer[1];
+                        if (r1.Columns.Count >= 2 && r2.Columns.Count >= 2)
                         {
                             bool aligned = true;
-                            for (int c = 0; c < r1.Columns.Count; c++)
+                            for (int c = 0; c < Math.Min(r1.Columns.Count, r2.Columns.Count); c++)
                             {
-                                if (Math.Abs(r1.Columns[c].X - r2.Columns[c].X) > 25f)
+                                if (Math.Abs(r1.Columns[c].X - r2.Columns[c].X) > 30f)
                                 {
                                     aligned = false;
                                     break;
                                 }
                             }
-                            if (aligned) { isRealTable = true; break; }
+                            if (aligned) isRealTable = true;
                         }
                     }
                 }
@@ -536,8 +550,14 @@ public class HeuristicPdfEngine
                         
                         if (previousParaBottomY.HasValue)
                         {
-                            // Negative gaps pull the paragraph up, allowing side-by-side positioning
                             float yGap = previousParaBottomY.Value - elem.Y; 
+                            
+                            if (yGap > 0)
+                            {
+                                float maxAllowedGap = 50f;
+                                if (yGap > maxAllowedGap) yGap = maxAllowedGap;
+                            }
+                            
                             if (Math.Abs(yGap) > 2f) pImg.SetMarginTop(yGap);
                         }
                         
@@ -602,9 +622,6 @@ public class HeuristicPdfEngine
             FlushParagraph();
             RenderBufferedTable();
             previousParaBottomY = null;
-
-            if (pageNum < sourceDoc.GetNumberOfPages())
-                layoutDoc.Add(new iText.Layout.Element.AreaBreak(iText.Layout.Properties.AreaBreakType.NEXT_PAGE));
         }
 
         layoutDoc.Close();
