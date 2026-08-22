@@ -335,6 +335,7 @@ public class HeuristicPdfEngine
         {
             var page = sourceDoc.GetPage(pageNum);
             float pageWidth = page.GetPageSize().GetWidth();
+            float pageHeight = page.GetPageSize().GetHeight();
 
             var listener = new StructuralEventListener();
             var processor = new PdfCanvasProcessor(listener);
@@ -559,7 +560,16 @@ public class HeuristicPdfEngine
                     @"^([•○▪\-\*]|\d+\.|[a-zA-Z]\))(\s|$)"
                 );
 
-                if (maxFont >= baseFontSize + 2f)
+                // Detect page headers (top 1 inch) and footers (bottom 1 inch)
+                bool isPageHeader = firstLineY > pageHeight - 72f;
+                bool isPageFooter = firstLineY < 72f;
+                bool isMarginalia = isPageHeader || isPageFooter;
+
+                if (isMarginalia)
+                {
+                    p.GetAccessibilityProperties().SetRole(iText.Kernel.Pdf.Tagging.StandardRoles.ARTIFACT);
+                }
+                else if (maxFont >= baseFontSize + 2f)
                     p.GetAccessibilityProperties().SetRole("H1");
                 else if (allBold && isShort)
                     p.GetAccessibilityProperties().SetRole("H2");
@@ -653,6 +663,17 @@ public class HeuristicPdfEngine
                     // Left aligned: let the text flow naturally. A strict right margin is unnecessary 
                     // and causes catastrophic wrapping.
                     p.SetMarginRight(15f);
+                }
+
+                if (isMarginalia)
+                {
+                    // Pin headers and footers to their exact absolute positions so they aren't 
+                    // pushed to the next page if the body text reflows and gets longer.
+                    float blockWidth = pageWidth - minLeft - computedRightMargin;
+                    if (blockWidth < 50f) blockWidth = 50f;
+                    // Bottom coordinate is roughly baseline minus descender
+                    float bottomY = currentParagraphLines.Last().Y - (firstLineFontSize * 0.2f);
+                    p.SetFixedPosition(pageNum, minLeft, bottomY, blockWidth);
                 }
 
                 layoutDoc.Add(p);
