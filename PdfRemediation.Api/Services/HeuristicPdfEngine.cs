@@ -22,6 +22,11 @@ public class PdfElement
     public bool IsImage => ImageBytes != null;
     public float FontSize { get; set; }
     public bool IsBold { get; set; }
+    public bool IsItalic { get; set; }
+    public float FontColorR { get; set; }
+    public float FontColorG { get; set; }
+    public float FontColorB { get; set; }
+    public string OriginalFontName { get; set; } = "";
 }
 
 public class StructuralEventListener : IEventListener
@@ -47,6 +52,39 @@ public class StructuralEventListener : IEventListener
             var fontProgram = font?.GetFontProgram();
             var fontName = fontProgram?.GetFontNames()?.GetFontName()?.ToLowerInvariant() ?? "";
             bool isBold = fontName.Contains("bold") || fontName.Contains("black") || fontName.Contains("heavy");
+            bool isItalic = fontName.Contains("italic") || fontName.Contains("oblique");
+
+            // Extract font color from graphics state
+            float colorR = 0, colorG = 0, colorB = 0;
+            try
+            {
+                var gs = textInfo.GetGraphicsState();
+                if (gs != null)
+                {
+                    var fillColor = gs.GetFillColor();
+                    if (fillColor != null)
+                    {
+                        var cv = fillColor.GetColorValue();
+                        int numComponents = fillColor.GetNumberOfComponents();
+                        if (numComponents == 3) // RGB
+                        {
+                            colorR = cv[0]; colorG = cv[1]; colorB = cv[2];
+                        }
+                        else if (numComponents == 1) // Gray
+                        {
+                            colorR = colorG = colorB = cv[0];
+                        }
+                        else if (numComponents == 4) // CMYK
+                        {
+                            float c1 = cv[0], m1 = cv[1], y1 = cv[2], k1 = cv[3];
+                            colorR = (1 - c1) * (1 - k1);
+                            colorG = (1 - m1) * (1 - k1);
+                            colorB = (1 - y1) * (1 - k1);
+                        }
+                    }
+                }
+            }
+            catch { }
 
             var startPoint = textInfo.GetBaseline().GetStartPoint();
             var endPoint = textInfo.GetBaseline().GetEndPoint();
@@ -58,7 +96,12 @@ public class StructuralEventListener : IEventListener
                 X = startPoint.Get(0),
                 EndX = endPoint.Get(0),
                 FontSize = approxSize,
-                IsBold = isBold
+                IsBold = isBold,
+                IsItalic = isItalic,
+                FontColorR = colorR,
+                FontColorG = colorG,
+                FontColorB = colorB,
+                OriginalFontName = fontName
             });
         }
         else if (type == EventType.RENDER_IMAGE)
@@ -105,6 +148,7 @@ public class MergedFragment
         
     public float FontSize => Elements.Any() ? Elements.Max(e => e.FontSize) : 0;
     public bool IsBold => Elements.Any() && Elements.All(e => e.IsBold);
+    public bool IsItalic => Elements.Any() && Elements.All(e => e.IsItalic);
 }
 
 public class AssembledLine
@@ -133,6 +177,44 @@ public class HeuristicPdfEngine
         if (line.MaxFontSize >= baseFontSize + 2f) return true;
         if (line.AllBold && line.JoinedText.Length < 80) return true;
         return false;
+    }
+
+    /// <summary>
+    /// Maps an original font name to the closest standard PDF font, respecting bold and italic.
+    /// </summary>
+    private static string MapToStandardFont(string originalFontName, bool isBold, bool isItalic)
+    {
+        string lower = (originalFontName ?? "").ToLowerInvariant();
+
+        // Symbol fonts
+        if (lower.Contains("symbol")) return "Symbol";
+        if (lower.Contains("zapf") || lower.Contains("dingbat")) return "ZapfDingbats";
+
+        // Monospace
+        if (lower.Contains("courier") || lower.Contains("mono") || lower.Contains("consolas") || lower.Contains("menlo"))
+        {
+            if (isBold && isItalic) return "Courier-BoldOblique";
+            if (isBold) return "Courier-Bold";
+            if (isItalic) return "Courier-Oblique";
+            return "Courier";
+        }
+
+        // Sans-serif
+        if (lower.Contains("arial") || lower.Contains("helvetica") || lower.Contains("verdana") ||
+            lower.Contains("tahoma") || lower.Contains("calibri") || lower.Contains("segoe") ||
+            lower.Contains("sans") || lower.Contains("gothic") || lower.Contains("franklin"))
+        {
+            if (isBold && isItalic) return "Helvetica-BoldOblique";
+            if (isBold) return "Helvetica-Bold";
+            if (isItalic) return "Helvetica-Oblique";
+            return "Helvetica";
+        }
+
+        // Serif (default for academic/formal documents)
+        if (isBold && isItalic) return "Times-BoldItalic";
+        if (isBold) return "Times-Bold";
+        if (isItalic) return "Times-Italic";
+        return "Times-Roman";
     }
 
     private static List<AssembledLine> MergeMultiLineCells(List<AssembledLine> rows, float baseFontSize)
@@ -170,7 +252,7 @@ public class HeuristicPdfEngine
                             });
                         }
                         
-                        // Normalize the baseline (Y) of the merged row so TextRise evaluates correctly inside the single paragraph
+                        // Normalize the baseline (Y) of the merged row so TextRise evaluates correctly
                         float offset = current.Y - rows[i].Y;
                         var normalizedElements = rows[i].Columns[c].Elements.Select(e => new PdfElement 
                         {
@@ -178,6 +260,11 @@ public class HeuristicPdfEngine
                             X = e.X, EndX = e.EndX,
                             FontSize = e.FontSize,
                             IsBold = e.IsBold,
+                            IsItalic = e.IsItalic,
+                            FontColorR = e.FontColorR,
+                            FontColorG = e.FontColorG,
+                            FontColorB = e.FontColorB,
+                            OriginalFontName = e.OriginalFontName,
                             ImageBytes = e.ImageBytes,
                             ImageHeight = e.ImageHeight,
                             ImageWidth = e.ImageWidth,
@@ -236,8 +323,10 @@ public class HeuristicPdfEngine
 
         pdfDoc.SetTagged();
         var layoutDoc = new iText.Layout.Document(pdfDoc);
-        
         layoutDoc.SetMargins(0, 0, 0, 0);
+
+        // Font cache shared across all pages
+        var fontCache = new Dictionary<string, iText.Kernel.Font.PdfFont>();
 
         using var sourceReader = new PdfReader(new MemoryStream(pdfBytes));
         using var sourceDoc = new PdfDocument(sourceReader);
@@ -263,6 +352,37 @@ public class HeuristicPdfEngine
                 baseFontSize = (float)(double)fsGrp.Key;
             }
 
+            // ---------------------------------------------------------------
+            // Helper: Create a fully styled iText Text element
+            // ---------------------------------------------------------------
+            iText.Layout.Element.Text CreateStyledText(string textContent, PdfElement styleSource, float lineY)
+            {
+                string fontKey = MapToStandardFont(styleSource.OriginalFontName, styleSource.IsBold, styleSource.IsItalic);
+                if (!fontCache.TryGetValue(fontKey, out var pdfFont))
+                {
+                    try { pdfFont = iText.Kernel.Font.PdfFontFactory.CreateFont(fontKey); }
+                    catch { pdfFont = iText.Kernel.Font.PdfFontFactory.CreateFont("Helvetica"); }
+                    fontCache[fontKey] = pdfFont;
+                }
+
+                var txt = new iText.Layout.Element.Text(textContent);
+                txt.SetFont(pdfFont);
+                txt.SetFontSize(styleSource.FontSize);
+
+                // Apply font color
+                txt.SetFontColor(new iText.Kernel.Colors.DeviceRgb(
+                    styleSource.FontColorR, styleSource.FontColorG, styleSource.FontColorB));
+
+                // Apply text rise for superscripts/subscripts
+                if (styleSource.Y > lineY + 2f) txt.SetTextRise(styleSource.Y - lineY);
+                else if (styleSource.Y < lineY - 2f) txt.SetTextRise(styleSource.Y - lineY);
+
+                return txt;
+            }
+
+            // ---------------------------------------------------------------
+            // 1. Group text fragments into lines (sliding window on Y)
+            // ---------------------------------------------------------------
             var sortedFragments = textFragments.OrderByDescending(e => e.Y).ToList();
             var lineGroupsList = new List<List<PdfElement>>();
 
@@ -275,8 +395,6 @@ public class HeuristicPdfEngine
                 for (int i = 1; i < sortedFragments.Count; i++)
                 {
                     float yDiff = Math.Abs(currentY - sortedFragments[i].Y);
-                    // Use a fixed threshold: fragments within 6pt of the dominant baseline belong to the same line.
-                    // This safely absorbs superscripts/subscripts without merging separate lines.
                     if (yDiff < 6f)
                     {
                         currentGroup.Add(sortedFragments[i]);
@@ -290,22 +408,23 @@ public class HeuristicPdfEngine
                 }
             }
 
+            // ---------------------------------------------------------------
+            // 2. Assemble lines with merged columns
+            // ---------------------------------------------------------------
             var assembledLines = new List<AssembledLine>();
             foreach (var group in lineGroupsList)
             {
                 if (!group.Any()) continue;
                 
                 var fragments = group.OrderBy(e => e.X).ToList();
-                
-                // Use the dominant (most frequent) Y as the line's baseline anchor.
-                // This prevents a superscript/subscript from hijacking the anchor and
-                // causing all normal text to get a TextRise offset (which causes overlap).
+
+                // Use the dominant (most frequent) Y as the baseline anchor
                 float dominantY = group
-                    .GroupBy(e => Math.Round(e.Y * 2f) / 2f) // bucket to 0.5pt
+                    .GroupBy(e => Math.Round(e.Y * 2f) / 2f)
                     .OrderByDescending(g => g.Count())
                     .First()
                     .First().Y;
-                
+
                 var line = new AssembledLine { Y = dominantY };
 
                 var cur = new MergedFragment { X = fragments[0].X, EndX = fragments[0].EndX };
@@ -346,44 +465,97 @@ public class HeuristicPdfEngine
 
             var tableRowsBuffer = new List<AssembledLine>();
 
+            // ---------------------------------------------------------------
+            // Helper: Render batched styled fragments into a paragraph
+            // ---------------------------------------------------------------
+            void RenderFragmentsIntoParagraph(iText.Layout.Element.Paragraph p, MergedFragment frag, float lineY, bool appendSpace)
+            {
+                if (!frag.Elements.Any()) return;
+
+                var sb = new System.Text.StringBuilder();
+                var currentEl = frag.Elements[0];
+                sb.Append(currentEl.Text);
+
+                for (int i = 1; i < frag.Elements.Count; i++)
+                {
+                    var e = frag.Elements[i];
+
+                    bool sameFont = Math.Abs(e.FontSize - currentEl.FontSize) < 0.1f;
+                    bool sameBold = e.IsBold == currentEl.IsBold;
+                    bool sameItalic = e.IsItalic == currentEl.IsItalic;
+                    bool sameY = Math.Abs(e.Y - currentEl.Y) < 1f;
+                    bool sameColor = Math.Abs(e.FontColorR - currentEl.FontColorR) < 0.02f
+                                  && Math.Abs(e.FontColorG - currentEl.FontColorG) < 0.02f
+                                  && Math.Abs(e.FontColorB - currentEl.FontColorB) < 0.02f;
+
+                    if (sameFont && sameBold && sameItalic && sameY && sameColor)
+                    {
+                        if (e.X - frag.Elements[i - 1].EndX > 2f)
+                        {
+                            if (!sb.ToString().EndsWith(" ") && !e.Text.StartsWith(" "))
+                                sb.Append(" ");
+                        }
+                        sb.Append(e.Text);
+                    }
+                    else
+                    {
+                        // Flush accumulated text with current style
+                        p.Add(CreateStyledText(sb.ToString(), currentEl, lineY));
+
+                        sb.Clear();
+                        if (e.X - frag.Elements[i - 1].EndX > 2f && !e.Text.StartsWith(" "))
+                            sb.Append(" ");
+                        sb.Append(e.Text);
+                        currentEl = e;
+                    }
+                }
+
+                // Flush remaining
+                if (sb.Length > 0)
+                {
+                    if (appendSpace && !sb.ToString().EndsWith(" "))
+                        sb.Append(" ");
+                    p.Add(CreateStyledText(sb.ToString(), currentEl, lineY));
+                }
+            }
+
+            // ---------------------------------------------------------------
+            // FlushParagraph: render accumulated paragraph lines
+            // ---------------------------------------------------------------
             void FlushParagraph()
             {
                 if (!currentParagraphLines.Any()) return;
 
                 var p = new iText.Layout.Element.Paragraph();
-                
                 p.SetMarginBottom(0f);
                 p.SetMarginTop(0f);
-                
+
                 float firstLineY = currentParagraphLines.First().Y;
                 float firstLineFontSize = currentParagraphLines.First().MaxFontSize;
-                
+
                 if (previousParaBottomY.HasValue)
                 {
-                    float yGap = previousParaBottomY.Value - firstLineY; 
+                    float yGap = previousParaBottomY.Value - firstLineY;
                     float standardLineHeight = firstLineFontSize * 1.2f;
                     float extraSpace = yGap - standardLineHeight;
-                    
-                    if (extraSpace > 0) 
+
+                    if (extraSpace > 0)
                     {
                         float maxAllowedSpace = firstLineFontSize * 2f;
                         if (extraSpace > maxAllowedSpace) extraSpace = maxAllowedSpace;
                     }
-                    
+
                     if (Math.Abs(extraSpace) > 2f)
-                    {
                         p.SetMarginTop(extraSpace);
-                    }
                 }
 
                 float maxFont = currentParagraphLines.Max(l => l.MaxFontSize);
                 bool allBold = currentParagraphLines.All(l => l.AllBold);
-                
                 string full = string.Join(" ", currentParagraphLines.Select(l => l.JoinedText)).Trim();
                 bool isShort = full.Length < 80;
 
                 bool isListItem = System.Text.RegularExpressions.Regex.IsMatch(
-                    currentParagraphLines.First().JoinedText, 
+                    currentParagraphLines.First().JoinedText,
                     @"^([•○▪\-\*]|\d+\.|[a-zA-Z]\))(\s|$)"
                 );
 
@@ -396,79 +568,32 @@ public class HeuristicPdfEngine
                 else
                     p.GetAccessibilityProperties().SetRole("P");
 
-                foreach (var line in currentParagraphLines)
+                // Render each line, preserving original line breaks with \n
+                for (int lineIndex = 0; lineIndex < currentParagraphLines.Count; lineIndex++)
                 {
-                    foreach (var frag in line.Columns)
-                    {
-                        if (!frag.Elements.Any()) continue;
-                        
-                        var currentTextObj = new System.Text.StringBuilder();
-                        var currentElement = frag.Elements[0];
-                        currentTextObj.Append(currentElement.Text);
-                        
-                        for (int i = 1; i < frag.Elements.Count; i++)
-                        {
-                            var e = frag.Elements[i];
-                            
-                            bool sameFont = Math.Abs(e.FontSize - currentElement.FontSize) < 0.1f;
-                            bool sameBold = e.IsBold == currentElement.IsBold;
-                            bool sameY = Math.Abs(e.Y - currentElement.Y) < 1f;
-                            
-                            if (sameFont && sameBold && sameY)
-                            {
-                                if (e.X - frag.Elements[i-1].EndX > 2f)
-                                {
-                                    if (!currentTextObj.ToString().EndsWith(" ") && !e.Text.StartsWith(" "))
-                                        currentTextObj.Append(" ");
-                                }
-                                currentTextObj.Append(e.Text);
-                            }
-                            else
-                            {
-                                var txt = new iText.Layout.Element.Text(currentTextObj.ToString());
-                                if (currentElement.IsBold) txt.SetBold();
-                                txt.SetFontSize(currentElement.FontSize);
-                                
-                                if (currentElement.Y > line.Y + 2f) txt.SetTextRise(currentElement.Y - line.Y);
-                                else if (currentElement.Y < line.Y - 2f) txt.SetTextRise(currentElement.Y - line.Y);
-                                
-                                p.Add(txt);
-                                
-                                currentTextObj.Clear();
-                                if (e.X - frag.Elements[i-1].EndX > 2f)
-                                {
-                                    if (!e.Text.StartsWith(" "))
-                                        currentTextObj.Append(" ");
-                                }
-                                currentTextObj.Append(e.Text);
-                                currentElement = e;
-                            }
-                        }
-                        
-                        if (currentTextObj.Length > 0)
-                        {
-                            bool isLastLine = (line == currentParagraphLines.Last());
-                            bool isLastCol = (frag == line.Columns.Last());
-                            bool needSpace = !(isLastLine && isLastCol);
-                            
-                            if (needSpace && !currentTextObj.ToString().EndsWith(" "))
-                                currentTextObj.Append(" ");
+                    var line = currentParagraphLines[lineIndex];
+                    bool isLastLine = (lineIndex == currentParagraphLines.Count - 1);
 
-                            var txt = new iText.Layout.Element.Text(currentTextObj.ToString());
-                            if (currentElement.IsBold) txt.SetBold();
-                            txt.SetFontSize(currentElement.FontSize);
-                            
-                            if (currentElement.Y > line.Y + 2f) txt.SetTextRise(currentElement.Y - line.Y);
-                            else if (currentElement.Y < line.Y - 2f) txt.SetTextRise(currentElement.Y - line.Y);
-                            
-                            p.Add(txt);
-                        }
+                    for (int colIdx = 0; colIdx < line.Columns.Count; colIdx++)
+                    {
+                        var frag = line.Columns[colIdx];
+                        bool isLastCol = (colIdx == line.Columns.Count - 1);
+                        // Append space between columns within the same line
+                        bool appendSpace = !isLastCol;
+                        RenderFragmentsIntoParagraph(p, frag, line.Y, appendSpace);
+                    }
+
+                    // Preserve original line breaks: insert \n between lines (not after last)
+                    if (!isLastLine)
+                    {
+                        p.Add(new iText.Layout.Element.Text("\n"));
                     }
                 }
 
+                // ----- Alignment & margins -----
                 bool allLeftsMatch = true;
                 bool allRightsMatch = true;
-                
+
                 float firstLeft = currentParagraphLines.First().Columns.First().X;
                 float firstRight = currentParagraphLines.First().Columns.Last().EndX;
 
@@ -477,9 +602,9 @@ public class HeuristicPdfEngine
                     var l = currentParagraphLines[i];
                     float left = l.Columns.First().X;
                     float right = l.Columns.Last().EndX;
-                    
+
                     if (Math.Abs(left - firstLeft) > 15f) allLeftsMatch = false;
-                    
+
                     if (i < currentParagraphLines.Count - 1 || currentParagraphLines.Count == 1)
                     {
                         if (Math.Abs(right - firstRight) > 20f) allRightsMatch = false;
@@ -490,15 +615,15 @@ public class HeuristicPdfEngine
                 float maxRight = currentParagraphLines.Max(l => l.Columns.Last().EndX);
                 float firstLineIndent = firstLeft - minLeft;
 
+                // Preserve the original left margin exactly
                 p.SetMarginLeft(minLeft);
 
                 if (firstLineIndent > 5f)
                     p.SetFirstLineIndent(firstLineIndent);
 
                 bool isJustified = (currentParagraphLines.Count >= 2 && allLeftsMatch && allRightsMatch);
-                
-                // Only consider centering for single-line, short text (titles, headings).
-                // Multi-line paragraphs are NEVER centered — they are body text.
+
+                // CENTER only for single-line, short, centered-on-page text (titles)
                 bool isCentered = false;
                 if (currentParagraphLines.Count == 1 && isShort)
                 {
@@ -507,28 +632,27 @@ public class HeuristicPdfEngine
                     float centerOfText = (minLeft + maxRight) / 2f;
                     float centerOfPage = pageWidth / 2f;
                     if (leftMargin > 80f && rightMargin > 80f && Math.Abs(centerOfText - centerOfPage) < 30f)
-                    {
                         isCentered = true;
-                    }
                 }
+
+                // Preserve the original right margin exactly
+                float computedRightMargin = pageWidth - maxRight;
+                if (computedRightMargin < 0) computedRightMargin = 0;
 
                 if (isJustified)
                 {
-                    float rightMargin = pageWidth - maxRight - 15f;
-                    if (rightMargin < 0) rightMargin = 0;
-                    p.SetMarginRight(rightMargin);
+                    p.SetMarginRight(computedRightMargin);
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.JUSTIFIED);
                 }
                 else if (isCentered)
                 {
-                    float rightMargin = pageWidth - maxRight;
-                    if (rightMargin < 0) rightMargin = 0;
-                    p.SetMarginRight(rightMargin);
+                    p.SetMarginRight(computedRightMargin);
                     p.SetTextAlignment(iText.Layout.Properties.TextAlignment.CENTER);
                 }
                 else
                 {
-                    p.SetMarginRight(15f); 
+                    // Left aligned: preserve original right margin to control line width
+                    p.SetMarginRight(computedRightMargin);
                 }
 
                 layoutDoc.Add(p);
@@ -537,13 +661,15 @@ public class HeuristicPdfEngine
                 currentParaIsHeader = false;
             }
 
+            // ---------------------------------------------------------------
+            // RenderBufferedTable: render accumulated table rows
+            // ---------------------------------------------------------------
             void RenderBufferedTable()
             {
                 if (!tableRowsBuffer.Any()) return;
 
                 bool isRealTable = false;
                 int maxColsFound = tableRowsBuffer.Max(r => r.Columns.Count);
-                
                 var multiColRows = tableRowsBuffer.Where(r => r.Columns.Count >= 2).ToList();
 
                 if (multiColRows.Count >= 3)
@@ -563,10 +689,7 @@ public class HeuristicPdfEngine
                     for (int c = 0; c < colsToCheck; c++)
                     {
                         if (Math.Abs(r1.Columns[c].X - r2.Columns[c].X) > 30f)
-                        {
-                            aligned = false;
-                            break;
-                        }
+                        { aligned = false; break; }
                     }
                     if (aligned) isRealTable = true;
                 }
@@ -591,46 +714,46 @@ public class HeuristicPdfEngine
                 bool firstRowIsHeader = false;
                 if (mergedRows.Count >= 2)
                 {
-                    var first  = mergedRows[0];
+                    var first = mergedRows[0];
                     var second = mergedRows[1];
-                    bool firstBold   = first.AllBold;
-                    bool secondBold  = second.AllBold;
-                    bool firstLarger = first.MaxFontSize > second.MaxFontSize + 0.5f;
-                    firstRowIsHeader = (firstBold && !secondBold) || firstLarger;
+                    firstRowIsHeader = (first.AllBold && !second.AllBold) || first.MaxFontSize > second.MaxFontSize + 0.5f;
                 }
 
-                float tableMinX = mergedRows.Min(r => r.Columns.First().X);
-                float tableMaxX = mergedRows.Max(r => r.Columns.Last().EndX);
-                
                 int maxCols = mergedRows.Max(r => r.Columns.Count);
-                
+
+                // Compute exact column widths from original positions
+                var referenceRows = mergedRows.Where(r => r.Columns.Count == maxCols).ToList();
+                if (!referenceRows.Any()) referenceRows = mergedRows;
+
                 float[] colWidths = new float[maxCols];
                 for (int c = 0; c < maxCols; c++)
                 {
-                    float maxColWidth = 10f;
-                    foreach (var row in mergedRows)
+                    var rowsWithCol = referenceRows.Where(r => r.Columns.Count > c).ToList();
+                    if (rowsWithCol.Any())
                     {
-                        if (row.Columns.Count > c)
+                        float colStart = rowsWithCol.Min(r => r.Columns[c].X);
+                        if (c < maxCols - 1)
                         {
-                            if (row.Columns.Count == 1 && maxCols > 1) continue; 
-                            float w = row.Columns[c].EndX - row.Columns[c].X;
-                            if (w > maxColWidth) maxColWidth = w;
+                            var rowsWithNextCol = referenceRows.Where(r => r.Columns.Count > c + 1).ToList();
+                            if (rowsWithNextCol.Any())
+                                colWidths[c] = rowsWithNextCol.Min(r => r.Columns[c + 1].X) - colStart;
+                            else
+                                colWidths[c] = rowsWithCol.Max(r => r.Columns[c].EndX) - colStart;
+                        }
+                        else
+                        {
+                            colWidths[c] = rowsWithCol.Max(r => r.Columns[c].EndX) - colStart;
                         }
                     }
-                    colWidths[c] = maxColWidth;
+                    if (colWidths[c] < 15f) colWidths[c] = 15f;
                 }
-                
-                var table = new iText.Layout.Element.Table(iText.Layout.Properties.UnitValue.CreatePercentArray(colWidths));
-                
+
+                var colUnitWidths = colWidths.Select(w => 
+                    iText.Layout.Properties.UnitValue.CreatePointValue(w)).ToArray();
+                var table = new iText.Layout.Element.Table(colUnitWidths);
+
+                float tableMinX = mergedRows.Min(r => r.Columns.First().X);
                 table.SetMarginLeft(tableMinX);
-                
-                float tableWidth = (tableMaxX - tableMinX) + 50f; 
-                if (tableWidth > pageWidth - tableMinX - 10f) 
-                    tableWidth = pageWidth - tableMinX - 10f;
-                if (tableWidth < 100f) tableWidth = 100f;
-                
-                table.SetWidth(iText.Layout.Properties.UnitValue.CreatePointValue(tableWidth));
-                
                 table.SetMarginTop(0f);
                 table.SetMarginBottom(0f);
 
@@ -643,72 +766,17 @@ public class HeuristicPdfEngine
                     {
                         int colspan = (row.Columns.Count == 1 && maxCols > 1) ? maxCols : 1;
                         var cell = new iText.Layout.Element.Cell(1, colspan);
+                        cell.SetPadding(2f);
 
                         if (isHeaderRow)
                             cell.GetAccessibilityProperties().SetRole("TH");
 
                         var pCell = new iText.Layout.Element.Paragraph().SetMargin(0f);
-                        if (col.Elements.Any())
-                        {
-                            var currentTextObj = new System.Text.StringBuilder();
-                            var currentElement = col.Elements[0];
-                            currentTextObj.Append(currentElement.Text);
-                            
-                            for (int i = 1; i < col.Elements.Count; i++)
-                            {
-                                var e = col.Elements[i];
-                                
-                                bool sameFont = Math.Abs(e.FontSize - currentElement.FontSize) < 0.1f;
-                                bool sameBold = e.IsBold == currentElement.IsBold;
-                                bool sameY = Math.Abs(e.Y - currentElement.Y) < 1f;
-                                
-                                if (sameFont && sameBold && sameY)
-                                {
-                                    if (e.X - col.Elements[i-1].EndX > 2f)
-                                    {
-                                        if (!currentTextObj.ToString().EndsWith(" ") && !e.Text.StartsWith(" "))
-                                            currentTextObj.Append(" ");
-                                    }
-                                    currentTextObj.Append(e.Text);
-                                }
-                                else
-                                {
-                                    var txt = new iText.Layout.Element.Text(currentTextObj.ToString());
-                                    if (currentElement.IsBold) txt.SetBold();
-                                    txt.SetFontSize(currentElement.FontSize);
-                                    
-                                    if (currentElement.Y > row.Y + 2f) txt.SetTextRise(currentElement.Y - row.Y);
-                                    else if (currentElement.Y < row.Y - 2f) txt.SetTextRise(currentElement.Y - row.Y);
-                                    
-                                    pCell.Add(txt);
-                                    
-                                    currentTextObj.Clear();
-                                    if (e.X - col.Elements[i-1].EndX > 2f)
-                                    {
-                                        if (!e.Text.StartsWith(" "))
-                                            currentTextObj.Append(" ");
-                                    }
-                                    currentTextObj.Append(e.Text);
-                                    currentElement = e;
-                                }
-                            }
-                            
-                            if (currentTextObj.Length > 0)
-                            {
-                                var txt = new iText.Layout.Element.Text(currentTextObj.ToString());
-                                if (currentElement.IsBold) txt.SetBold();
-                                txt.SetFontSize(currentElement.FontSize);
-                                
-                                if (currentElement.Y > row.Y + 2f) txt.SetTextRise(currentElement.Y - row.Y);
-                                else if (currentElement.Y < row.Y - 2f) txt.SetTextRise(currentElement.Y - row.Y);
-                                
-                                pCell.Add(txt);
-                            }
-                        }
+                        RenderFragmentsIntoParagraph(pCell, col, row.Y, false);
                         cell.Add(pCell);
                         table.AddCell(cell);
                     }
-                    
+
                     if (row.Columns.Count > 1)
                     {
                         for (int pad = row.Columns.Count; pad < maxCols; pad++)
@@ -756,20 +824,18 @@ public class HeuristicPdfEngine
                         pImg.GetAccessibilityProperties().SetAlternateDescription("Extracted Figure");
                         pImg.SetMargin(0f);
                         pImg.SetMarginLeft(elem.X);
-                        
+
                         if (previousParaBottomY.HasValue)
                         {
-                            float yGap = previousParaBottomY.Value - elem.Y; 
-                            
+                            float yGap = previousParaBottomY.Value - elem.Y;
                             if (yGap > 0)
                             {
                                 float maxAllowedGap = 50f;
                                 if (yGap > maxAllowedGap) yGap = maxAllowedGap;
                             }
-                            
                             if (Math.Abs(yGap) > 2f) pImg.SetMarginTop(yGap);
                         }
-                        
+
                         layoutDoc.Add(pImg);
                         previousParaBottomY = elem.Y - (elem.ImageHeight > 0 ? elem.ImageHeight : 100f);
                     }
@@ -785,7 +851,7 @@ public class HeuristicPdfEngine
                         tableRowsBuffer.Add(line);
                         continue;
                     }
-                    
+
                     if (tableRowsBuffer.Any())
                     {
                         float yGap = Math.Abs(tableRowsBuffer.Last().Y - line.Y);
@@ -802,20 +868,20 @@ public class HeuristicPdfEngine
                     if (string.IsNullOrWhiteSpace(lineText)) continue;
 
                     bool lineIsHeader = IsHeaderLine(line, baseFontSize);
-                    bool lineIsListItem = System.Text.RegularExpressions.Regex.IsMatch(lineText, @"^([ 	?\-\*]|\d+\.|[a-zA-Z]\))(\s|$)");
+                    bool lineIsListItem = System.Text.RegularExpressions.Regex.IsMatch(lineText, @"^([•○▪\-\*]|\d+\.|[a-zA-Z]\))(\s|$)");
 
                     bool shouldFlush = false;
                     if (currentParagraphLines.Any())
                     {
                         var lastLineInPara = currentParagraphLines.Last();
-                        
+
                         float lineSpacing = Math.Abs(lastLineInPara.Y - line.Y);
                         float prevAvgFont = currentParagraphLines.Average(l => l.MaxFontSize);
                         bool largeYGap = lineSpacing > (prevAvgFont * 2.5f);
 
                         float paraMinX = currentParagraphLines.Min(l => l.Columns.First().X);
                         bool isIndented = (line.Columns.First().X - paraMinX) > 15f;
-                        
+
                         bool fontSizeChanged = Math.Abs(line.MaxFontSize - prevAvgFont) > 1.5f;
 
                         if (lineIsHeader) shouldFlush = true;
@@ -823,16 +889,14 @@ public class HeuristicPdfEngine
                         if (largeYGap) shouldFlush = true;
                         if (isIndented) shouldFlush = true;
                         if (fontSizeChanged) shouldFlush = true;
-                        if (lineIsListItem) shouldFlush = true; 
+                        if (lineIsListItem) shouldFlush = true;
                     }
 
                     if (shouldFlush)
                         FlushParagraph();
 
                     if (!currentParagraphLines.Any())
-                    {
                         currentParaIsHeader = lineIsHeader;
-                    }
 
                     currentParagraphLines.Add(line);
                 }
